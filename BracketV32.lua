@@ -10,13 +10,13 @@ local Debug,LocalPlayer = false,PlayerService.LocalPlayer
 local MainAssetFolder = Debug and ReplicatedStorage.BracketV32
 	or InsertService:LoadLocalAsset("rbxassetid://9153139105")
 
-	local function GetAsset(AssetPath)
-		AssetPath = AssetPath:split("/")
-		local Asset = MainAssetFolder
-		for Index,Name in pairs(AssetPath) do
-			Asset = Asset[Name]
-		end return Asset:Clone()
-	end
+local function GetAsset(AssetPath)
+	AssetPath = AssetPath:split("/")
+	local Asset = MainAssetFolder
+	for Index,Name in pairs(AssetPath) do
+		Asset = Asset[Name]
+	end return Asset:Clone()
+end
 local function GetLongest(A,B)
 	return A > B and A or B
 end
@@ -214,8 +214,8 @@ local function InitWindow(ScreenAsset,Window)
 	end
 	function Window:SetColor(Color)
 		if Color.R < 5/255
-		and Color.G < 5/255
-		and Color.B < 5/255 then
+			and Color.G < 5/255
+			and Color.B < 5/255 then
 			Color = Color3.fromRGB(5,5,5)
 		end
 
@@ -234,12 +234,12 @@ local function InitWindow(ScreenAsset,Window)
 		WindowAsset.Visible = Window.Enabled
 
 		if not Debug then
-		RunService:SetRobloxGuiFocused(Window.Enabled and Window.Flags["UI/Blur"]) end
+			RunService:SetRobloxGuiFocused(Window.Enabled and Window.Flags["UI/Blur"]) end
 		if not Window.Enabled then for Index,Instance in pairs(ScreenAsset:GetChildren()) do
-			if Instance.Name == "Palette" or Instance.Name == "OptionContainer" then
-				Instance.Visible = false
-			end
-		end end
+				if Instance.Name == "Palette" or Instance.Name == "OptionContainer" then
+					Instance.Visible = false
+				end
+			end end
 	end
 
 	function Window:SetValue(Flag,Value)
@@ -268,12 +268,12 @@ local function InitWindow(ScreenAsset,Window)
 		ScreenAsset.Watermark.Title.Text = Watermark.Title
 		ScreenAsset.Watermark.Position = UDim2.new(0.95,0,0,10)
 		ScreenAsset.Watermark.Size = UDim2.new(
-		0,ScreenAsset.Watermark.Title.TextBounds.X + 6,
-		0,ScreenAsset.Watermark.Title.TextBounds.Y + 6)
+			0,ScreenAsset.Watermark.Title.TextBounds.X + 6,
+			0,ScreenAsset.Watermark.Title.TextBounds.Y + 6)
 		MakeDraggable(ScreenAsset.Watermark,ScreenAsset.Watermark,function(Position)
 			Window.Flags[Watermark.Flag] = 
-			{Position.X.Scale,Position.X.Offset,
-			Position.Y.Scale,Position.Y.Offset}
+				{Position.X.Scale,Position.X.Offset,
+					Position.Y.Scale,Position.Y.Offset}
 		end)
 
 		function Watermark:Toggle(Boolean)
@@ -883,7 +883,7 @@ local function InitDropdown(Parent,ScreenAsset,Window,Dropdown)
 			ContainerRender = RunService.RenderStepped:Connect(function()
 				if not OptionContainerAsset.Visible then ContainerRender:Disconnect() end
 				OptionContainerAsset.Position = UDim2.new(0,DropdownAsset.Background.AbsolutePosition.X,0,
-				DropdownAsset.Background.AbsolutePosition.Y + DropdownAsset.Background.AbsoluteSize.Y + 42)
+					DropdownAsset.Background.AbsolutePosition.Y + DropdownAsset.Background.AbsoluteSize.Y + 42)
 				OptionContainerAsset.Size = UDim2.new(0,DropdownAsset.Background.AbsoluteSize.X,0,OptionContainerAsset.ListLayout.AbsoluteContentSize.Y + 2)
 			end)
 			OptionContainerAsset.Visible = true
@@ -1025,6 +1025,237 @@ local function InitDropdown(Parent,ScreenAsset,Window,Dropdown)
 	end
 	function Dropdown:ToolTip(Text)
 		InitToolTip(DropdownAsset,ScreenAsset,Text)
+	end
+end
+local function InitSearchableDropdown(Parent,ScreenAsset,Window,Dropdown)
+	local DropdownAsset = GetAsset("Dropdown/Dropdown")
+	local OptionContainerAsset = GetAsset("Dropdown/OptionContainer")
+	DropdownAsset.Parent = Parent
+	DropdownAsset.Title.Text = Dropdown.Name
+	OptionContainerAsset.Parent = ScreenAsset
+	local ContainerRender = nil
+	
+	local SearchBox = Instance.new("TextBox", OptionContainerAsset)
+	SearchBox.Name = "SearchBox"
+	SearchBox.BackgroundColor3 = Color3.fromRGB(40,40,40)
+	SearchBox.BorderSizePixel = 1
+	SearchBox.TextColor3 = Color3.fromRGB(220,220,220)
+	SearchBox.TextSize = 14
+	SearchBox.Font = Enum.Font.Code
+	SearchBox.PlaceholderColor3 = Color3.fromRGB(150,150,150)
+	SearchBox.PlaceholderText = "Search..."
+	SearchBox.Size = UDim2.new(1,-4,0,20)
+	SearchBox.Position = UDim2.new(0,2,0,2)
+	SearchBox.ClipsDescendants = true
+	SearchBox.ClearTextOnFocus = false
+	
+	local ListLayout = OptionContainerAsset:WaitForChild("ListLayout")
+	ListLayout.Padding = UDim2.new(0,2)
+	
+	local OptionsScroller = Instance.new("ScrollingFrame", OptionContainerAsset)
+	OptionsScroller.Name = "OptionsScroller"
+	SearchBox.BackgroundTransparency = 1
+	SearchBox.BorderSizePixel = 0
+	SearchBox.Size = UDim2.new(1,-4,1,26)
+	SearchBox.Position = UDim2.new(0,2,0,24)
+	SearchBox.ScrollBarThickness = 6
+	SearchBox.ScrollBarImageColor3 = Color3.fromRGB(80,80,80)
+	SearchBox.CanvasSize = UDim2.new(0,0,0,0)
+	SearchBox.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	SearchBox.ScrollingDirection = Enum.ScrollingDirection.Y
+	SearchBox.VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar
+	
+	local OptionsListLayout = Instance.new("UIListLayout", OptionsScroller)
+	OptionsListLayout.Name = "OptionsListLayout"
+	OptionsListLayout.Padding = UDim2.new(0,2)
+	
+	ListLayout:Destroy()
+	
+	DropdownAsset.MouseButton1Click:Connect(function()
+		if not OptionsScroller.Visible and OptionsScroller.CanvasSize.Y.Offset > 0 then
+			ContainerRender = RunService.RenderStepped:Connect(function()
+				if not OptionsScroller.Visible then
+					if ContainerRender then
+						ContainerRender:Disconnect()
+					end
+				end
+				OptionContainerAsset.Position = UDim2.new(0,DropdownAsset.Background.AbsolutePosition.X,0,DropdownAsset.Background.AbsolutePosition.Y + DropdownAsset.Background.AbsoluteSize.Y + 42)
+				OptionContainerAsset.Size = UDim2.new(0,DropdownAsset.Background.AbsoluteSize.X,0,OptionsScroller.CanvasSize.Y.Offset + 26)
+			end)
+			SearchBox.Text = ""
+			OptionContainerAsset.Visible = true
+			SearchBox:CaptureFocus()
+		else
+			if ContainerRender then
+				ContainerRender:Disconnect()
+			end
+			OptionContainerAsset.Visible = false
+		end
+	end)
+	
+	DropdownAsset.Title:GetPropertyChangedSignal("TextBounds"):Connect(function()
+		DropdownAsset.Title.Size = UDim2.new(1,0,0,DropdownAsset.Title.TextBounds.Y + 2)
+		DropdownAsset.Background.Position = UDim2.new(0.5,0,0,DropdownAsset.Title.Size.Y.Offset)
+		DropdownAsset.Size = UDim2.new(1,0,0,DropdownAsset.Title.Size.Y.Offset + DropdownAsset.Background.Size.Y.Offset)
+	end)
+
+	local function SetOptionState(Option,Toggle)
+		local Selected = {}
+
+		-- Value Setting
+		if Option.Mode == "Button" then
+			for Index, Option in pairs(Dropdown.List) do
+				if Option.Mode == "Button" then
+					if Option.Instance then
+						Option.Instance.BorderColor3 = Color3.fromRGB(60,60,60)
+					end
+					Option.Value = false
+				end
+			end
+			Option.Value = true
+			OptionContainerAsset.Visible = false
+		elseif Option.Mode == "Toggle" then
+			Option.Value = Toggle
+		end
+
+		Option.Instance.BorderColor3 = Option.Value
+			and Window.Color or Color3.fromRGB(60,60,60)
+
+		-- Selected Setting
+		for Index, Option in pairs(Dropdown.List) do
+			if Option.Value then
+				Selected[#Selected + 1] = Option.Name
+			end
+		end
+
+		-- Dropdown Title Setting
+		if #Selected == 0 then
+			DropdownAsset.Background.Value.Text = "..."
+		else
+			DropdownAsset.Background.Value.Text = table.concat(Selected,", ")
+		end
+
+		Dropdown.Value = Selected
+		if Option.Callback then
+			Option.Callback(Dropdown.Value,Option)
+		end
+		Window.Flags[Dropdown.Flag] = Dropdown.Value
+	end
+	
+	local function FilterOptions(searchText)
+		
+	end
+	
+	local function CreateOption(Option)
+		local OptionAsset = GetAsset("Dropdown/Option")
+		OptionAsset.Parent = OptionsScroller
+		OptionAsset.Title.Text = Option.Name
+		Option.Instance = OptionAsset
+		
+		table.insert(Window.Colorable, OptionAsset)
+		OptionAsset.MouseButton1Click:Connect(function()
+			SetOptionState(Option, not Option.Value)
+		end)
+		OptionAsset.Title:GetPropertyChangedSignal("TextBounds"):Connect(function()
+			OptionAsset.Size = UDim2.new(1,0,0,OptionAsset.Title.TextBounds.Y + 2)
+		end)
+	end
+	
+	for Index, Option in pairs(Dropdown.List) do
+		CreateOption(Option)
+	end
+	
+	SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+		FilterOptions(SearchBox.Text)
+	end)
+	
+	SearchBox.Focused:Connect(function()
+		OptionsScroller.CanvasPosition = Vector2.new(0,0)
+	end)
+	
+	SearchBox.FocusLost:Connect(function(enterPressed)
+		if enterPressed then
+			for Index, Option in pairs(Dropdown.List) do
+				if Option.Instance and Option.Instance.Visible then
+					SetOptionState(Option, not Option.Value)
+					break
+				end
+			end
+		end
+	end)
+	
+	for Index, Option in pairs(Dropdown.List) do
+		if Option.Value then
+			SetOptionState(Option,Option.Value)
+		end
+	end
+	
+	function Dropdown:BulkAdd(Table)
+		for Index,Option in pairs(Table) do
+			local OptionAsset = GetAsset("Dropdown/Option")
+			OptionAsset.Parent = OptionContainerAsset
+			OptionAsset.Title.Text = Option.Name
+			Option.Instance = OptionAsset
+
+			table.insert(Window.Colorable, OptionAsset)
+			table.insert(Dropdown.List,Option)
+			OptionAsset.MouseButton1Click:Connect(function()
+				SetOptionState(Option,not Option.Value)
+			end)
+			OptionAsset.Title:GetPropertyChangedSignal("TextBounds"):Connect(function()
+				OptionAsset.Size = UDim2.new(1,0,0,OptionAsset.Title.TextBounds.Y + 2)
+			end)
+		end
+		for Index, Option in pairs(Dropdown.List) do
+			if Option.Value then
+				SetOptionState(Option,Option.Value)
+			end
+		end
+	end
+	function Dropdown:RemoveOption(Name)
+		for Index, Option in pairs(Dropdown.List) do
+			if Option.Name == Name then
+				if Option.Instance then
+					Option.Instance:Destroy()
+				end
+				Dropdown.List[Index] = nil
+			end
+		end
+	end
+	function Dropdown:Clear()
+		for Index, Option in pairs(Dropdown.List) do
+			if Option.Instance then
+				Option.Instance:Destroy()
+			end
+			Dropdown.List[Index] = nil
+		end
+	end
+	function Dropdown:SetValue(Options)
+		if #Options == 0 then
+			DropdownAsset.Background.Value.Text = "..."
+			return
+		end
+		for Index, Option in pairs(Dropdown.List) do
+			if table.find(Options,Option.Name) then
+				SetOptionState(Option,true)
+			else
+				if Option.Mode ~= "Button" then
+					SetOptionState(Option,false)
+				end
+			end
+		end
+	end
+
+	function Dropdown:SetName(Name)
+		Dropdown.Name = Name
+		DropdownAsset.Title.Text = Name
+	end
+	function Dropdown:ToolTip(Text)
+		InitToolTip(DropdownAsset,ScreenAsset,Text)
+	end
+	
+	function Dropdown:RefreshFilter()
+		FilterOptions(SearchBox.Text)
 	end
 end
 local function InitColorpicker(Parent,ScreenAsset,Window,Colorpicker)
@@ -1367,6 +1598,17 @@ function Bracket:Window(Window)
 			InitDropdown(ChooseTab(Dropdown.Side),Bracket.ScreenAsset,Window,Dropdown)
 			return Dropdown
 		end
+		function Tab:SearchableDropdown(Dropdown)
+			Dropdown = GetType(Dropdown,{},"table")
+			Dropdown.Name = GetType(Dropdown.Name,"SearchableDropdown","string")
+			Dropdown.Flag = GetType(Dropdown.Flag,Dropdown.Name,"string")
+			Dropdown.List = GetType(Dropdown.List,{},"table")
+			Window.Elements[#Window.Elements + 1] = Dropdown
+			Window.Flags[Dropdown.Flag] = Dropdown.Value
+
+			InitSearchableDropdown(ChooseTab(Dropdown.Side),Bracket.ScreenAsset,Window,Dropdown)
+			return Dropdown
+		end
 		function Tab:Colorpicker(Colorpicker)
 			Colorpicker = GetType(Colorpicker,{},"table")
 			Colorpicker.Name = GetType(Colorpicker.Name,"Colorpicker","string")
@@ -1475,6 +1717,17 @@ function Bracket:Window(Window)
 				InitDropdown(SectionContainer,Bracket.ScreenAsset,Window,Dropdown)
 				return Dropdown
 			end
+			function Section:SearchableDropdown(Dropdown)
+				Dropdown = GetType(Dropdown,{},"table")
+				Dropdown.Name = GetType(Dropdown.Name,"Searchable Dropdown","string")
+				Dropdown.Flag = GetType(Dropdown.Flag,Dropdown.Name,"string")
+				Dropdown.List = GetType(Dropdown.List,{},"table")
+				Window.Elements[#Window.Elements + 1] = Dropdown
+				Window.Flags[Dropdown.Flag] = Dropdown.Value
+
+				InitSearchableDropdown(SectionContainer,Bracket.ScreenAsset,Window,Dropdown)
+				return Dropdown
+			end
 			function Section:Colorpicker(Colorpicker)
 				Colorpicker = GetType(Colorpicker,{},"table")
 				Colorpicker.Name = GetType(Colorpicker.Name,"Colorpicker","string")
@@ -1567,14 +1820,14 @@ function Bracket:Notification2(Notification)
 	end
 
 	TweenSize(NotificationAsset.Main.Size.X.Offset + 4,
-	NotificationAsset.Main.Size.Y.Offset + 4,function()
-		task.wait(Notification.Duration) TweenSize(0,
 		NotificationAsset.Main.Size.Y.Offset + 4,function()
-			if Notification.Callback then
-				Notification.Callback()
-			end NotificationAsset:Destroy()
+			task.wait(Notification.Duration) TweenSize(0,
+				NotificationAsset.Main.Size.Y.Offset + 4,function()
+					if Notification.Callback then
+						Notification.Callback()
+					end NotificationAsset:Destroy()
+				end)
 		end)
-	end)
 end
 
 return Bracket
