@@ -1043,6 +1043,7 @@ local function InitSearchableDropdown(Parent, ScreenAsset, Window, Dropdown)
 	local SearchBox = Instance.new("TextBox")
 	SearchBox.Name = "SearchBox"
 	SearchBox.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	SearchBox.BackgroundTransparency = 1
 	SearchBox.BorderColor3 = Color3.fromRGB(60, 60, 60)
 	SearchBox.BorderSizePixel = 1
 	SearchBox.TextColor3 = Color3.fromRGB(220, 220, 220)
