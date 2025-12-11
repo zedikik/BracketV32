@@ -1038,29 +1038,8 @@ local function InitSearchableDropdown(Parent, ScreenAsset, Window, Dropdown)
 	-- Получаем существующий ListLayout
 	local ListLayout = OptionContainerAsset:WaitForChild("ListLayout")
 
-	-- Создаем ScrollingFrame для опций с поиском
-	local OptionsScroller = Instance.new("ScrollingFrame")
-	OptionsScroller.Name = "OptionsScroller"
-	OptionsScroller.BackgroundTransparency = 1
-	OptionsScroller.BorderSizePixel = 0
-	OptionsScroller.Size = UDim2.new(1, -4, 1, -26) -- Оставляем место для поиска
-	OptionsScroller.Position = UDim2.new(0, 2, 0, 24)
-	OptionsScroller.ScrollBarThickness = 6
-	OptionsScroller.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 80)
-	OptionsScroller.ScrollingDirection = Enum.ScrollingDirection.Y
-	OptionsScroller.VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar
-	OptionsScroller.Parent = OptionContainerAsset
-
-	-- Создаем новый UIListLayout для ScrollingFrame
-	local OptionsListLayout = Instance.new("UIListLayout")
-	OptionsListLayout.Name = "ListLayout"
-	OptionsListLayout.Padding = UDim.new(0, 2) -- Используем UDim вместо UDim2
-	OptionsListLayout.Parent = OptionsScroller
-
-	-- Удаляем старый ListLayout из OptionContainerAsset
-	ListLayout:Destroy()
-
-	-- Создаем TextBox для поиска
+	-- Создаем TextBox для поиска и добавляем его ВНУТРИ OptionContainerAsset
+	-- но ПЕРЕД существующими опциями
 	local SearchBox = Instance.new("TextBox")
 	SearchBox.Name = "SearchBox"
 	SearchBox.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
@@ -1077,6 +1056,27 @@ local function InitSearchableDropdown(Parent, ScreenAsset, Window, Dropdown)
 	SearchBox.ClearTextOnFocus = false
 	SearchBox.Parent = OptionContainerAsset
 
+	-- Изменяем Padding ListLayout чтобы учесть SearchBox
+	ListLayout.Padding = UDim.new(0, 2)
+
+	-- Меняем позицию ListLayout чтобы он был под SearchBox
+	ListLayout.Parent = OptionContainerAsset
+	local function updateListLayoutPosition()
+		ListLayout.Position = UDim2.new(0, 2, 0, 24) -- Под SearchBox
+	end
+
+	-- Создаем Frame для опций
+	local OptionsContainer = Instance.new("Frame")
+	OptionsContainer.Name = "OptionsContainer"
+	OptionsContainer.BackgroundTransparency = 1
+	OptionsContainer.BorderSizePixel = 0
+	OptionsContainer.Size = UDim2.new(1, -4, 1, -26)
+	OptionsContainer.Position = UDim2.new(0, 2, 0, 24)
+	OptionsContainer.Parent = OptionContainerAsset
+
+	-- Перемещаем ListLayout в OptionsContainer
+	ListLayout.Parent = OptionsContainer
+
 	DropdownAsset.MouseButton1Click:Connect(function()
 		if not OptionContainerAsset.Visible then
 			ContainerRender = RunService.RenderStepped:Connect(function()
@@ -1086,7 +1086,7 @@ local function InitSearchableDropdown(Parent, ScreenAsset, Window, Dropdown)
 				OptionContainerAsset.Position = UDim2.new(0, DropdownAsset.Background.AbsolutePosition.X, 0,
 					DropdownAsset.Background.AbsolutePosition.Y + DropdownAsset.Background.AbsoluteSize.Y + 42)
 				OptionContainerAsset.Size = UDim2.new(0, DropdownAsset.Background.AbsoluteSize.X, 0, 
-					OptionsScroller.CanvasSize.Y.Offset + 26)
+					OptionsContainer.AbsoluteSize.Y + 26)
 			end)
 			SearchBox.Text = ""
 			OptionContainerAsset.Visible = true
@@ -1164,10 +1164,10 @@ local function InitSearchableDropdown(Parent, ScreenAsset, Window, Dropdown)
 		end
 	end
 
-	-- Функция для создания опции
-	local function CreateOption(Option)
+	-- Создаем все опции
+	for _, Option in pairs(Dropdown.List) do
 		local OptionAsset = GetAsset("Dropdown/Option")
-		OptionAsset.Parent = OptionsScroller
+		OptionAsset.Parent = OptionsContainer
 		OptionAsset.Title.Text = Option.Name
 		Option.Instance = OptionAsset
 
@@ -1178,13 +1178,6 @@ local function InitSearchableDropdown(Parent, ScreenAsset, Window, Dropdown)
 		OptionAsset.Title:GetPropertyChangedSignal("TextBounds"):Connect(function()
 			OptionAsset.Size = UDim2.new(1, 0, 0, OptionAsset.Title.TextBounds.Y + 2)
 		end)
-
-		return OptionAsset
-	end
-
-	-- Создаем все опции
-	for _, Option in pairs(Dropdown.List) do
-		CreateOption(Option)
 	end
 
 	-- Подключаем поиск
@@ -1194,7 +1187,8 @@ local function InitSearchableDropdown(Parent, ScreenAsset, Window, Dropdown)
 
 	-- При фокусе на SearchBox
 	SearchBox.Focused:Connect(function()
-		OptionsScroller.CanvasPosition = Vector2.new(0, 0)
+		-- Прокручиваем в начало
+		OptionsContainer.Position = UDim2.new(0, 2, 0, 24)
 	end)
 
 	-- При нажатии Enter в SearchBox
@@ -1216,15 +1210,33 @@ local function InitSearchableDropdown(Parent, ScreenAsset, Window, Dropdown)
 		end
 	end
 
-	-- Автоматический размер канваса
-	OptionsListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-		OptionsScroller.CanvasSize = UDim2.new(0, 0, 0, OptionsListLayout.AbsoluteContentSize.Y)
+	-- Автоматический размер контейнера с опциями
+	ListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		local contentHeight = ListLayout.AbsoluteContentSize.Y
+		OptionsContainer.Size = UDim2.new(1, -4, 0, contentHeight)
+
+		-- Обновляем размер OptionContainerAsset
+		if OptionContainerAsset.Visible then
+			OptionContainerAsset.Size = UDim2.new(0, DropdownAsset.Background.AbsoluteSize.X, 
+				0, contentHeight + 26)
+		end
 	end)
 
 	function Dropdown:BulkAdd(Table)
 		for _, Option in pairs(Table) do
-			local OptionAsset = CreateOption(Option)
+			local OptionAsset = GetAsset("Dropdown/Option")
+			OptionAsset.Parent = OptionsContainer
+			OptionAsset.Title.Text = Option.Name
+			Option.Instance = OptionAsset
+
+			table.insert(Window.Colorable, OptionAsset)
 			table.insert(Dropdown.List, Option)
+			OptionAsset.MouseButton1Click:Connect(function()
+				SetOptionState(Option, not Option.Value)
+			end)
+			OptionAsset.Title:GetPropertyChangedSignal("TextBounds"):Connect(function()
+				OptionAsset.Size = UDim2.new(1, 0, 0, OptionAsset.Title.TextBounds.Y + 2)
+			end)
 		end
 
 		for _, Option in pairs(Dropdown.List) do
