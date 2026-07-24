@@ -67,6 +67,8 @@ local function AttachVisibility(api, asset)
     api._Visible = true
     api._OriginalParent = asset.Parent
     api._OriginalLayoutOrder = asset.LayoutOrder
+    api._OriginalVisible = asset:IsA("GuiObject") and asset.Visible or nil
+    api._OriginalActive = asset:IsA("GuiObject") and asset.Active or nil
     function api:SetVisible(value)
         value = value == true
         if self._Visible == value then return end
@@ -77,18 +79,30 @@ local function AttachVisibility(api, asset)
                 asset.LayoutOrder = self._OriginalLayoutOrder
                 asset.Parent = parent
                 if asset:IsA("GuiObject") then
-                    asset.Visible = true
-                    asset.Active = true
+                    asset.Visible = self._OriginalVisible ~= false
+                    asset.Active = self._OriginalActive == true
                 end
             end
         else
             if asset.Parent and asset.Parent ~= Runtime.HiddenContainer then
                 self._OriginalParent = asset.Parent
                 self._OriginalLayoutOrder = asset.LayoutOrder
+                if asset:IsA("GuiObject") then
+                    self._OriginalVisible = asset.Visible
+                    self._OriginalActive = asset.Active
+                end
             end
             if asset:IsA("GuiObject") then
                 asset.Visible = false
                 asset.Active = false
+            end
+            for _, screen in ipairs(Runtime.Screens) do
+                if screen and screen.Parent then
+                    local optionContainer = screen:FindFirstChild("OptionContainer")
+                    local palette = screen:FindFirstChild("Palette")
+                    if optionContainer then optionContainer.Visible = false end
+                    if palette then palette.Visible = false end
+                end
             end
             asset.Parent = Runtime.HiddenContainer
         end
@@ -790,7 +804,7 @@ local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 			Keybind.Callback = Callback
 		end
 
-		AttachVisibility(Keybind, ToggleAsset)
+		AttachVisibility(Keybind, ToggleAsset.Keybind)
 		return Keybind
 	end
 	AttachVisibility(Toggle, ToggleAsset)
@@ -1399,7 +1413,7 @@ function Bracket:Window(Window)
 		local ChooseTab = InitTab(Bracket.ScreenAsset,WindowAsset,Window,Tab)
 
 		function Tab:AddConfigSection(PFName,Side)
-			local ConfigSection = Tab:Section({Name = "Configs",Side = Side}) do
+			local ConfigSection = Tab:Section({Name = "Config Manager",Side = Side}) do
 				local ConfigList, ConfigDropdown = ConfigsToList(PFName), nil
 				local function UpdateList(Name)
 					ConfigDropdown:Clear()
@@ -1685,6 +1699,7 @@ function Bracket:Destroy()
 	Runtime.Screens = {}
 	Runtime.Windows = {}
 	Runtime.HiddenContainer = nil
+	Runtime.RefreshByInstance = setmetatable({}, {__mode = "k"})
 	pcall(function() RunService:SetRobloxGuiFocused(false) end)
 end
 
