@@ -6,6 +6,99 @@ local RunService = game:GetService("RunService")
 local PlayerService = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
 
+
+local Runtime = {
+    Connections = {},
+    Screens = {},
+    Windows = {},
+    Destroyed = false,
+    Generation = 0,
+    HiddenContainer = nil,
+    RefreshByInstance = setmetatable({}, {__mode = "k"}),
+}
+
+local function TrackConnection(connection)
+    if connection then
+        Runtime.Connections[#Runtime.Connections + 1] = connection
+    end
+    return connection
+end
+
+local function Connect(signal, callback)
+    if Runtime.Destroyed then return nil end
+    return TrackConnection(signal:Connect(callback))
+end
+
+local function DisconnectConnection(connection)
+    if connection then
+        pcall(function() connection:Disconnect() end)
+    end
+end
+
+local function GetRefresh(instance)
+    local current = instance
+    while current do
+        local refresh = Runtime.RefreshByInstance[current]
+        if refresh then return refresh end
+        current = current.Parent
+    end
+    return nil
+end
+
+local function QueueRefresh(instance)
+    local refresh = GetRefresh(instance)
+    if refresh then refresh() end
+end
+
+local function EnsureHiddenContainer(screenAsset)
+    if Runtime.HiddenContainer and Runtime.HiddenContainer.Parent then
+        return Runtime.HiddenContainer
+    end
+    local folder = Instance.new("Folder")
+    folder.Name = "BracketHiddenElements"
+    folder.Parent = screenAsset
+    Runtime.HiddenContainer = folder
+    return folder
+end
+
+local function AttachVisibility(api, asset)
+    if not api or not asset then return end
+    api._Asset = asset
+    api._Visible = true
+    api._OriginalParent = asset.Parent
+    api._OriginalLayoutOrder = asset.LayoutOrder
+    function api:SetVisible(value)
+        value = value == true
+        if self._Visible == value then return end
+        self._Visible = value
+        if value then
+            local parent = self._OriginalParent
+            if parent and parent.Parent then
+                asset.LayoutOrder = self._OriginalLayoutOrder
+                asset.Parent = parent
+                if asset:IsA("GuiObject") then
+                    asset.Visible = true
+                    asset.Active = true
+                end
+            end
+        else
+            if asset.Parent and asset.Parent ~= Runtime.HiddenContainer then
+                self._OriginalParent = asset.Parent
+                self._OriginalLayoutOrder = asset.LayoutOrder
+            end
+            if asset:IsA("GuiObject") then
+                asset.Visible = false
+                asset.Active = false
+            end
+            asset.Parent = Runtime.HiddenContainer
+        end
+        QueueRefresh(self._OriginalParent or asset)
+    end
+    function api:IsVisible()
+        return self._Visible == true
+    end
+end
+
 local Debug,LocalPlayer = false,PlayerService.LocalPlayer
 local MainAssetFolder = Debug and ReplicatedStorage.BracketV32
 	or InsertService:LoadLocalAsset("rbxassetid://9153139105")
@@ -29,13 +122,13 @@ end
 
 local function MakeDraggable(Dragger,Object,Callback)
 	local StartPosition,StartDrag = nil,nil
-	Dragger.InputBegan:Connect(function(Input)
+	Connect(Dragger.InputBegan, function(Input)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 then
 			StartPosition = UserInputService:GetMouseLocation()
 			StartDrag = Object.AbsolutePosition
 		end
 	end)
-	UserInputService.InputChanged:Connect(function(Input)
+	Connect(UserInputService.InputChanged, function(Input)
 		if StartDrag and Input.UserInputType == Enum.UserInputType.MouseMovement then
 			local Mouse = UserInputService:GetMouseLocation()
 			local Delta = Mouse - StartPosition
@@ -43,7 +136,7 @@ local function MakeDraggable(Dragger,Object,Callback)
 			Object.Position = Object.Position + UDim2.new(0,Delta.X,0,Delta.Y)
 		end
 	end)
-	Dragger.InputEnded:Connect(function(Input)
+	Connect(Dragger.InputEnded, function(Input)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 then
 			StartPosition,StartDrag = nil,nil
 			Callback(Object.Position)
@@ -53,13 +146,13 @@ end
 
 local function MakeResizeable(Dragger,Object,MinSize,Callback)
 	local StartPosition,StartSize = nil,nil
-	Dragger.InputBegan:Connect(function(Input)
+	Connect(Dragger.InputBegan, function(Input)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 then
 			StartPosition = UserInputService:GetMouseLocation()
 			StartSize = Object.AbsoluteSize
 		end
 	end)
-	UserInputService.InputChanged:Connect(function(Input)
+	Connect(UserInputService.InputChanged, function(Input)
 		if StartPosition and Input.UserInputType == Enum.UserInputType.MouseMovement then
 			local Mouse = UserInputService:GetMouseLocation()
 			local Delta = Mouse - StartPosition
@@ -70,7 +163,7 @@ local function MakeResizeable(Dragger,Object,MinSize,Callback)
 			Object.Size = UDim2.fromOffset(SizeX,SizeY)
 		end
 	end)
-	Dragger.InputEnded:Connect(function(Input)
+	Connect(Dragger.InputEnded, function(Input)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 then
 			StartPosition,StartSize = nil,nil
 			Callback(Object.Size)
@@ -147,20 +240,24 @@ local function ConfigsToList(PFName)
 end
 
 local function InitToolTip(Parent,ScreenAsset,Text)
-	Parent.MouseEnter:Connect(function()
+	Connect(Parent.MouseEnter, function()
 		ScreenAsset.ToolTip.Text = Text
 		ScreenAsset.ToolTip.Size = UDim2.new(0,ScreenAsset.ToolTip.TextBounds.X + 2,0,ScreenAsset.ToolTip.TextBounds.Y + 2)
 		ScreenAsset.ToolTip.Visible = true
 	end)
-	Parent.MouseLeave:Connect(function()
+	Connect(Parent.MouseLeave, function()
 		ScreenAsset.ToolTip.Visible = false
 	end)
 end
 local function InitScreen()
 	local ScreenAsset = GetAsset("Screen/Bracket")
-	if not Debug then sethiddenproperty(ScreenAsset,"OnTopOfCoreBlur",true) end
+	if not Debug and type(sethiddenproperty) == "function" then
+		pcall(sethiddenproperty, ScreenAsset, "OnTopOfCoreBlur", true)
+	end
 	ScreenAsset.Name = "Bracket " .. game:GetService("HttpService"):GenerateGUID(false)
 	ScreenAsset.Parent = Debug and LocalPlayer:FindFirstChildOfClass("PlayerGui") or CoreGui
+	Runtime.Screens[#Runtime.Screens + 1] = ScreenAsset
+	EnsureHiddenContainer(ScreenAsset)
 	--[[if Debug then
 		ScreenAsset.Parent = LocalPlayer.PlayerGui
 	else
@@ -184,15 +281,15 @@ local function InitWindow(ScreenAsset,Window)
 		Window.Size = Size
 	end)
 
-	WindowAsset.TabButtonContainer.ListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+	Connect(WindowAsset.TabButtonContainer.ListLayout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
 		WindowAsset.TabButtonContainer.CanvasSize = UDim2.new(0,WindowAsset.TabButtonContainer.ListLayout.AbsoluteContentSize.X,0,0)
 	end)
-	RunService.RenderStepped:Connect(function()
+	Connect(RunService.RenderStepped, function()
 		if WindowAsset.Visible then
 			ScreenAsset.ToolTip.Position = UDim2.new(0,UserInputService:GetMouseLocation().X + 5,0,UserInputService:GetMouseLocation().Y - 5)
 		end
 	end)
-	RunService.RenderStepped:Connect(function()
+	Connect(RunService.RenderStepped, function()
 		Window.RainbowHue = os.clock()%10/10
 		--[[if Window.RainbowHue < 1 then
 			Window.RainbowHue = Window.RainbowHue + 0.001
@@ -210,7 +307,7 @@ local function InitWindow(ScreenAsset,Window)
 	end
 	function Window:SetPosition(Position)
 		Window.Position = Position
-		WindowAsset.Pisition = Position
+		WindowAsset.Position = Position
 	end
 	function Window:SetColor(Color)
 		if Color.R < 5/255
@@ -363,23 +460,48 @@ local function InitTab(ScreenAsset,WindowAsset,Window,Tab)
 	TabButtonAsset.Size = UDim2.new(0,TabButtonAsset.TextBounds.X + 6,1,-1)
 	TabAsset.Parent = WindowAsset.TabContainer
 	TabAsset.Visible = false
+	TabAsset.ScrollingEnabled = true
+	TabAsset.ScrollingDirection = Enum.ScrollingDirection.Y
+	TabAsset.ScrollBarThickness = 6
+	TabAsset.ScrollBarImageTransparency = 0.15
+	TabAsset.ElasticBehavior = Enum.ElasticBehavior.Never
+	TabAsset.VerticalScrollBarInset = Enum.ScrollBarInset.None
 
+	local leftLayout = TabAsset.LeftSide.ListLayout
+	local rightLayout = TabAsset.RightSide.ListLayout
+	local updateQueued = false
+	local updating = false
+	local lastHeight = -1
+	local CONTENT_PADDING = 21
+
+	local function scheduleUpdate()
+		if updateQueued or Runtime.Destroyed then return end
+		updateQueued = true
+		local generation = Runtime.Generation
+		task.defer(function()
+			updateQueued = false
+			if Runtime.Destroyed or generation ~= Runtime.Generation or updating or not TabAsset.Parent then return end
+			updating = true
+			local height = math.ceil(math.max(
+				leftLayout.AbsoluteContentSize.Y,
+				rightLayout.AbsoluteContentSize.Y
+			) + CONTENT_PADDING)
+			height = math.max(0, height)
+			if math.abs(height - lastHeight) >= 1 then
+				lastHeight = height
+				TabAsset.CanvasSize = UDim2.fromOffset(0, height)
+			end
+			updating = false
+		end)
+	end
+
+	Runtime.RefreshByInstance[TabAsset] = scheduleUpdate
+	Runtime.RefreshByInstance[TabAsset.LeftSide] = scheduleUpdate
+	Runtime.RefreshByInstance[TabAsset.RightSide] = scheduleUpdate
 	table.insert(Window.Colorable,TabButtonAsset.Highlight)
-	TabAsset.LeftSide.ListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-		if ChooseTabSide(TabAsset,"Longest") == TabAsset.LeftSide then
-			TabAsset.CanvasSize = UDim2.new(0,0,0,TabAsset.LeftSide.ListLayout.AbsoluteContentSize.Y + 21)
-		else
-			TabAsset.CanvasSize = UDim2.new(0,0,0,TabAsset.RightSide.ListLayout.AbsoluteContentSize.Y + 21)
-		end
-	end)
-	TabAsset.RightSide.ListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-		if ChooseTabSide(TabAsset,"Longest") == TabAsset.LeftSide then
-			TabAsset.CanvasSize = UDim2.new(0,0,0,TabAsset.LeftSide.ListLayout.AbsoluteContentSize.Y + 21)
-		else
-			TabAsset.CanvasSize = UDim2.new(0,0,0,TabAsset.RightSide.ListLayout.AbsoluteContentSize.Y + 21)
-		end
-	end)
-	TabButtonAsset.MouseButton1Click:Connect(function()
+	Connect(leftLayout:GetPropertyChangedSignal("AbsoluteContentSize"), scheduleUpdate)
+	Connect(rightLayout:GetPropertyChangedSignal("AbsoluteContentSize"), scheduleUpdate)
+	Connect(TabButtonAsset.MouseButton1Click, function()
 		ChooseTab(ScreenAsset,TabButtonAsset,TabAsset)
 	end)
 
@@ -392,6 +514,12 @@ local function InitTab(ScreenAsset,WindowAsset,Window,Tab)
 		TabButtonAsset.Text = Name
 		TabButtonAsset.Size = UDim2.new(0,TabButtonAsset.TextBounds.X + 6,1,-1)
 	end
+	function Tab:RefreshLayout()
+		scheduleUpdate()
+	end
+	Tab._Asset = TabAsset
+	Tab._ScheduleUpdate = scheduleUpdate
+	scheduleUpdate()
 
 	return function(Side)
 		return ChooseTabSide(TabAsset,Side)
@@ -403,18 +531,44 @@ local function InitSection(Parent,Section)
 	SectionAsset.Parent = Parent
 	SectionAsset.Title.Text = Section.Name
 	SectionAsset.Title.Size = UDim2.new(0,SectionAsset.Title.TextBounds.X + 6,0,2)
+	local listLayout = SectionAsset.Container.ListLayout
+	local updateQueued = false
+	local lastHeight = -1
+	local tabRefresh = GetRefresh(Parent)
 
-	SectionAsset.Container.ListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-		SectionAsset.Size = UDim2.new(1,0,0,SectionAsset.Container.ListLayout.AbsoluteContentSize.Y + 15)
-	end)
+	local function refreshLayout()
+		if updateQueued or Runtime.Destroyed then return end
+		updateQueued = true
+		local generation = Runtime.Generation
+		task.defer(function()
+			updateQueued = false
+			if Runtime.Destroyed or generation ~= Runtime.Generation or not SectionAsset.Parent then return end
+			local height = math.ceil(listLayout.AbsoluteContentSize.Y + 15)
+			if math.abs(height - lastHeight) >= 1 then
+				lastHeight = height
+				SectionAsset.Size = UDim2.new(1,0,0,height)
+			end
+			if tabRefresh then tabRefresh() end
+		end)
+	end
+
+	Runtime.RefreshByInstance[SectionAsset] = refreshLayout
+	Runtime.RefreshByInstance[SectionAsset.Container] = refreshLayout
+	Connect(listLayout:GetPropertyChangedSignal("AbsoluteContentSize"), refreshLayout)
 
 	function Section:SetName(Name)
 		Section.Name = Name
 		SectionAsset.Title.Text = Name
-		SectionAsset.Title.Size = UDim2.new(0,Section.Title.TextBounds.X + 6,0,2)
+		SectionAsset.Title.Size = UDim2.new(0,SectionAsset.Title.TextBounds.X + 6,0,2)
+		refreshLayout()
 	end
+	function Section:RefreshLayout()
+		refreshLayout()
+	end
+	AttachVisibility(Section, SectionAsset)
+	refreshLayout()
 
-	return SectionAsset.Container
+	return SectionAsset.Container, SectionAsset
 end
 local function InitDivider(Parent,Divider)
 	local DividerAsset = GetAsset("Divider/Divider")
@@ -422,7 +576,7 @@ local function InitDivider(Parent,Divider)
 	DividerAsset.Parent = Parent
 	DividerAsset.Title.Text = Divider.Text
 
-	DividerAsset.Title:GetPropertyChangedSignal("TextBounds"):Connect(function()
+	Connect(DividerAsset.Title:GetPropertyChangedSignal("TextBounds"), function()
 		if DividerAsset.Title.TextBounds.X > 0 then
 			DividerAsset.Size = UDim2.new(1,0,0,DividerAsset.Title.TextBounds.Y)
 			DividerAsset.Left.Size = UDim2.new(0.5,-(DividerAsset.Title.TextBounds.X / 2) - 5,0,2)
@@ -440,6 +594,7 @@ local function InitDivider(Parent,Divider)
 		Divider.Text = Text
 		DividerAsset.Title.Text = Text
 	end
+	AttachVisibility(Divider, DividerAsset)
 end
 local function InitLabel(Parent,Label)
 	local LabelAsset = GetAsset("Label/Label")
@@ -447,7 +602,7 @@ local function InitLabel(Parent,Label)
 	LabelAsset.Parent = Parent
 	LabelAsset.Text = Label.Text
 
-	LabelAsset:GetPropertyChangedSignal("TextBounds"):Connect(function()
+	Connect(LabelAsset:GetPropertyChangedSignal("TextBounds"), function()
 		LabelAsset.Size = UDim2.new(1,0,0,LabelAsset.TextBounds.Y)
 	end)
 
@@ -455,6 +610,7 @@ local function InitLabel(Parent,Label)
 		Label.Text = Text
 		LabelAsset.Text = Text
 	end
+	AttachVisibility(Label, LabelAsset)
 end
 local function InitButton(Parent,ScreenAsset,Window,Button)
 	local ButtonAsset = GetAsset("Button/Button")
@@ -463,18 +619,18 @@ local function InitButton(Parent,ScreenAsset,Window,Button)
 	ButtonAsset.Title.Text = Button.Name
 
 	table.insert(Window.Colorable,ButtonAsset)
-	Button.Connection = ButtonAsset.MouseButton1Click:Connect(Button.Callback)
+	Button.Connection = Connect(ButtonAsset.MouseButton1Click, Button.Callback)
 
-	ButtonAsset.MouseButton1Down:Connect(function()
+	Connect(ButtonAsset.MouseButton1Down, function()
 		ButtonAsset.BorderColor3 = Window.Color
 	end)
-	ButtonAsset.MouseButton1Up:Connect(function()
+	Connect(ButtonAsset.MouseButton1Up, function()
 		ButtonAsset.BorderColor3 = Color3.new(0,0,0)
 	end)
-	ButtonAsset.MouseLeave:Connect(function()
+	Connect(ButtonAsset.MouseLeave, function()
 		ButtonAsset.BorderColor3 = Color3.new(0,0,0)
 	end)
-	ButtonAsset.Title:GetPropertyChangedSignal("TextBounds"):Connect(function()
+	Connect(ButtonAsset.Title:GetPropertyChangedSignal("TextBounds"), function()
 		ButtonAsset.Size = UDim2.new(1,0,0,ButtonAsset.Title.TextBounds.Y + 2)
 	end)
 
@@ -485,11 +641,12 @@ local function InitButton(Parent,ScreenAsset,Window,Button)
 	function Button:SetCallback(Callback)
 		Button.Callback = Callback
 		Button.Connection:Disconnect()
-		Button.Connection = ButtonAsset.MouseButton1Click:Connect(Callback)
+		Button.Connection = Connect(ButtonAsset.MouseButton1Click, Callback)
 	end
 	function Button:ToolTip(Text)
 		InitToolTip(ButtonAsset,ScreenAsset,Text)
 	end
+	AttachVisibility(Button, ButtonAsset)
 end
 local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 	local ToggleAsset = GetAsset("Toggle/Toggle")
@@ -499,13 +656,13 @@ local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 	ToggleAsset.Tick.BackgroundColor3 = Toggle.Value and Window.Color or Color3.fromRGB(60,60,60)
 
 	table.insert(Window.Colorable,ToggleAsset.Tick)
-	ToggleAsset.MouseButton1Click:Connect(function()
+	Connect(ToggleAsset.MouseButton1Click, function()
 		Toggle.Value = not Toggle.Value
 		Window.Flags[Toggle.Flag] = Toggle.Value
 		Toggle.Callback(Toggle.Value)
 		ToggleAsset.Tick.BackgroundColor3 = Toggle.Value and Window.Color or Color3.fromRGB(60,60,60)
 	end)
-	ToggleAsset.Title:GetPropertyChangedSignal("TextBounds"):Connect(function()
+	Connect(ToggleAsset.Title:GetPropertyChangedSignal("TextBounds"), function()
 		ToggleAsset.Size = UDim2.new(1,0,0,ToggleAsset.Title.TextBounds.Y)
 	end)
 
@@ -540,16 +697,16 @@ local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 		ToggleAsset.Keybind.Text = "[ " .. Keybind.Value .. " ]"
 		Keybind.WaitingForBind = false
 
-		ToggleAsset.Keybind.MouseButton1Click:Connect(function()
+		Connect(ToggleAsset.Keybind.MouseButton1Click, function()
 			ToggleAsset.Keybind.Text = "[ ... ]"
 			Keybind.WaitingForBind = true
 		end)
-		ToggleAsset.Keybind:GetPropertyChangedSignal("TextBounds"):Connect(function()
+		Connect(ToggleAsset.Keybind:GetPropertyChangedSignal("TextBounds"), function()
 			ToggleAsset.Keybind.Size = UDim2.new(0,ToggleAsset.Keybind.TextBounds.X,1,0)
 			ToggleAsset.Title.Size = UDim2.new(1,-ToggleAsset.Keybind.Size.X.Offset - 20,1,0)
 		end)
 
-		UserInputService.InputBegan:Connect(function(Input)
+		Connect(UserInputService.InputBegan, function(Input)
 			local Key = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
 			if Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.Keyboard then
 				if not table.find(Keybind.Blacklist,Key) then
@@ -603,7 +760,7 @@ local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 				end
 			end
 		end)
-		UserInputService.InputEnded:Connect(function(Input)
+		Connect(UserInputService.InputEnded, function(Input)
 			local Key = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
 			if Input.UserInputType == Enum.UserInputType.Keyboard then
 				if Key == Keybind.Value then
@@ -633,8 +790,10 @@ local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 			Keybind.Callback = Callback
 		end
 
+		AttachVisibility(Keybind, ToggleAsset)
 		return Keybind
 	end
+	AttachVisibility(Toggle, ToggleAsset)
 end
 local function InitSlider(Parent,ScreenAsset,Window,Slider)
 	local SliderAsset = GetAsset("Slider/Slider")
@@ -684,16 +843,16 @@ local function InitSlider(Parent,ScreenAsset,Window,Slider)
 		InitToolTip(SliderAsset,ScreenAsset,Text)
 	end
 
-	SliderAsset.Title:GetPropertyChangedSignal("TextBounds"):Connect(function()
+	Connect(SliderAsset.Title:GetPropertyChangedSignal("TextBounds"), function()
 		SliderAsset.Value.Size = UDim2.new(0,SliderAsset.Value.TextBounds.X,0,16)
 		SliderAsset.Title.Size = UDim2.new(1,-SliderAsset.Value.Size.X.Offset,0,16)
 		SliderAsset.Size = UDim2.new(1,0,0,SliderAsset.Title.TextBounds.Y + 8)
 	end)
-	SliderAsset.Value:GetPropertyChangedSignal("TextBounds"):Connect(function()
+	Connect(SliderAsset.Value:GetPropertyChangedSignal("TextBounds"), function()
 		SliderAsset.Value.Size = UDim2.new(0,SliderAsset.Value.TextBounds.X,0,16)
 		SliderAsset.Title.Size = UDim2.new(1,-SliderAsset.Value.Size.X.Offset,0,16)
 	end)
-	SliderAsset.Value.FocusLost:Connect(function()
+	Connect(SliderAsset.Value.FocusLost, function()
 		if not tonumber(SliderAsset.Value.Text) then
 			SliderAsset.Value.Text = Slider.Value
 		elseif tonumber(SliderAsset.Value.Text) <= Slider.Min then
@@ -704,22 +863,23 @@ local function InitSlider(Parent,ScreenAsset,Window,Slider)
 		UpdateVisual(SliderAsset.Value.Text)
 		SliderAsset.Value.Text = ""
 	end)
-	SliderAsset.InputBegan:Connect(function(Input)
+	Connect(SliderAsset.InputBegan, function(Input)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 then
 			AttachToMouse(Input)
 			Slider.Active = true
 		end
 	end)
-	SliderAsset.InputEnded:Connect(function(Input)
+	Connect(SliderAsset.InputEnded, function(Input)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 then
 			Slider.Active = false
 		end
 	end)
-	UserInputService.InputChanged:Connect(function(Input)
+	Connect(UserInputService.InputChanged, function(Input)
 		if Slider.Active and Input.UserInputType == Enum.UserInputType.MouseMovement then
 			AttachToMouse(Input)
 		end
 	end)
+	AttachVisibility(Slider, SliderAsset)
 end
 local function InitTextbox(Parent,ScreenAsset,Window,Textbox)
 	local TextboxAsset = GetAsset("Textbox/Textbox")
@@ -729,13 +889,13 @@ local function InitTextbox(Parent,ScreenAsset,Window,Textbox)
 	TextboxAsset.Background.Input.Text = Textbox.Value
 	TextboxAsset.Background.Input.PlaceholderText = Textbox.Placeholder
 
-	TextboxAsset.Title:GetPropertyChangedSignal("TextBounds"):Connect(function()
+	Connect(TextboxAsset.Title:GetPropertyChangedSignal("TextBounds"), function()
 		TextboxAsset.Size = UDim2.new(1,0,0,(TextboxAsset.Title.TextBounds.Y + 2) + (TextboxAsset.Background.Input.TextBounds.Y + 2))
 	end)
-	TextboxAsset.Background.Input:GetPropertyChangedSignal("TextBounds"):Connect(function()
+	Connect(TextboxAsset.Background.Input:GetPropertyChangedSignal("TextBounds"), function()
 		TextboxAsset.Background.Size = UDim2.new(1,0,0,TextboxAsset.Background.Input.TextBounds.Y + 2)
 	end)
-	TextboxAsset.Background.Input.FocusLost:Connect(function(EnterPressed)
+	Connect(TextboxAsset.Background.Input.FocusLost, function(EnterPressed)
 		if not EnterPressed then return end
 		Textbox.Value = TextboxAsset.Background.Input.Text
 		Window.Flags[Textbox.Flag] = Textbox.Value
@@ -765,6 +925,7 @@ local function InitTextbox(Parent,ScreenAsset,Window,Textbox)
 	function Textbox:ToolTip(Text)
 		InitToolTip(TextboxAsset,ScreenAsset,Text)
 	end
+	AttachVisibility(Textbox, TextboxAsset)
 end
 local function InitKeybind(Parent,ScreenAsset,Window,Keybind)
 	local KeybindAsset = GetAsset("Keybind/Keybind")
@@ -774,18 +935,18 @@ local function InitKeybind(Parent,ScreenAsset,Window,Keybind)
 	KeybindAsset.Value.Text = "[ " .. Keybind.Value .. " ]"
 	Keybind.WaitingForBind = false
 
-	KeybindAsset.MouseButton1Click:Connect(function()
+	Connect(KeybindAsset.MouseButton1Click, function()
 		KeybindAsset.Value.Text = "[ ... ]"
 		Keybind.WaitingForBind = true
 	end)
-	KeybindAsset.Title:GetPropertyChangedSignal("TextBounds"):Connect(function()
+	Connect(KeybindAsset.Title:GetPropertyChangedSignal("TextBounds"), function()
 		KeybindAsset.Size = UDim2.new(1,0,0,KeybindAsset.Title.TextBounds.Y)
 	end)
-	KeybindAsset.Value:GetPropertyChangedSignal("TextBounds"):Connect(function()
+	Connect(KeybindAsset.Value:GetPropertyChangedSignal("TextBounds"), function()
 		KeybindAsset.Value.Size = UDim2.new(0,KeybindAsset.Value.TextBounds.X,1,0)
 		KeybindAsset.Title.Size = UDim2.new(1,-KeybindAsset.Value.Size.X.Offset,1,0)
 	end)
-	UserInputService.InputBegan:Connect(function(Input)
+	Connect(UserInputService.InputBegan, function(Input)
 		local Key = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
 		if Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.Keyboard then
 			if not table.find(Keybind.Blacklist,Key) then
@@ -831,7 +992,7 @@ local function InitKeybind(Parent,ScreenAsset,Window,Keybind)
 			end
 		end
 	end)
-	UserInputService.InputEnded:Connect(function(Input)
+	Connect(UserInputService.InputEnded, function(Input)
 		local Key = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
 		if Input.UserInputType == Enum.UserInputType.Keyboard then
 			if Key == Keybind.Value then
@@ -869,6 +1030,7 @@ local function InitKeybind(Parent,ScreenAsset,Window,Keybind)
 	function Keybind:ToolTip(Text)
 		InitToolTip(KeybindAsset,ScreenAsset,Text)
 	end
+	AttachVisibility(Keybind, KeybindAsset)
 end
 local function InitDropdown(Parent,ScreenAsset,Window,Dropdown)
 	local DropdownAsset = GetAsset("Dropdown/Dropdown")
@@ -878,9 +1040,9 @@ local function InitDropdown(Parent,ScreenAsset,Window,Dropdown)
 	OptionContainerAsset.Parent = ScreenAsset
 	local ContainerRender = nil
 
-	DropdownAsset.MouseButton1Click:Connect(function()
+	Connect(DropdownAsset.MouseButton1Click, function()
 		if not OptionContainerAsset.Visible and OptionContainerAsset.ListLayout.AbsoluteContentSize.Y ~= 0 then
-			ContainerRender = RunService.RenderStepped:Connect(function()
+			ContainerRender = Connect(RunService.RenderStepped, function()
 				if not OptionContainerAsset.Visible then ContainerRender:Disconnect() end
 				OptionContainerAsset.Position = UDim2.new(0,DropdownAsset.Background.AbsolutePosition.X,0,
 				DropdownAsset.Background.AbsolutePosition.Y + DropdownAsset.Background.AbsoluteSize.Y + 42)
@@ -894,7 +1056,7 @@ local function InitDropdown(Parent,ScreenAsset,Window,Dropdown)
 			OptionContainerAsset.Visible = false
 		end
 	end)
-	DropdownAsset.Title:GetPropertyChangedSignal("TextBounds"):Connect(function()
+	Connect(DropdownAsset.Title:GetPropertyChangedSignal("TextBounds"), function()
 		DropdownAsset.Title.Size = UDim2.new(1,0,0,DropdownAsset.Title.TextBounds.Y + 2)
 		DropdownAsset.Background.Position = UDim2.new(0.5,0,0,DropdownAsset.Title.Size.Y.Offset)
 		DropdownAsset.Size = UDim2.new(1,0,0,DropdownAsset.Title.Size.Y.Offset + DropdownAsset.Background.Size.Y.Offset)
@@ -954,10 +1116,10 @@ local function InitDropdown(Parent,ScreenAsset,Window,Dropdown)
 		Option.Instance = OptionAsset
 
 		table.insert(Window.Colorable, OptionAsset)
-		OptionAsset.MouseButton1Click:Connect(function()
+		Connect(OptionAsset.MouseButton1Click, function()
 			SetOptionState(Option,not Option.Value)
 		end)
-		OptionAsset.Title:GetPropertyChangedSignal("TextBounds"):Connect(function()
+		Connect(OptionAsset.Title:GetPropertyChangedSignal("TextBounds"), function()
 			OptionAsset.Size = UDim2.new(1,0,0,OptionAsset.Title.TextBounds.Y + 2)
 		end)
 	end
@@ -976,10 +1138,10 @@ local function InitDropdown(Parent,ScreenAsset,Window,Dropdown)
 
 			table.insert(Window.Colorable, OptionAsset)
 			table.insert(Dropdown.List,Option)
-			OptionAsset.MouseButton1Click:Connect(function()
+			Connect(OptionAsset.MouseButton1Click, function()
 				SetOptionState(Option,not Option.Value)
 			end)
-			OptionAsset.Title:GetPropertyChangedSignal("TextBounds"):Connect(function()
+			Connect(OptionAsset.Title:GetPropertyChangedSignal("TextBounds"), function()
 				OptionAsset.Size = UDim2.new(1,0,0,OptionAsset.Title.TextBounds.Y + 2)
 			end)
 		end
@@ -1004,18 +1166,22 @@ local function InitDropdown(Parent,ScreenAsset,Window,Dropdown)
 		end
 	end
 	function Dropdown:SetValue(Options)
-		if #Options == 0 then
-			DropdownAsset.Background.Value.Text = "..."
-			return
-		end
-		for Index, Option in pairs(Dropdown.List) do
-			if table.find(Options,Option.Name) then
-				SetOptionState(Option,true)
-			else
-				if Option.Mode ~= "Button" then
-					SetOptionState(Option,false)
-				end
+		Options = type(Options) == "table" and Options or {}
+		local wanted = {}
+		for _, name in ipairs(Options) do wanted[name] = true end
+		local selected = {}
+		for _, option in pairs(Dropdown.List) do
+			option.Value = wanted[option.Name] == true
+			if option.Instance then
+				option.Instance.BorderColor3 = option.Value and Window.Color or Color3.fromRGB(60,60,60)
 			end
+			if option.Value then selected[#selected + 1] = option.Name end
+		end
+		Dropdown.Value = selected
+		Window.Flags[Dropdown.Flag] = Dropdown.Value
+		DropdownAsset.Background.Value.Text = #selected > 0 and table.concat(selected, ", ") or "..."
+		for _, option in pairs(Dropdown.List) do
+			if option.Callback then option.Callback(Dropdown.Value, option) end
 		end
 	end
 
@@ -1026,6 +1192,7 @@ local function InitDropdown(Parent,ScreenAsset,Window,Dropdown)
 	function Dropdown:ToolTip(Text)
 		InitToolTip(DropdownAsset,ScreenAsset,Text)
 	end
+	AttachVisibility(Dropdown, DropdownAsset)
 end
 local function InitColorpicker(Parent,ScreenAsset,Window,Colorpicker)
 	local ColorpickerAsset = GetAsset("Colorpicker/Colorpicker")
@@ -1065,13 +1232,13 @@ local function InitColorpicker(Parent,ScreenAsset,Window,Colorpicker)
 	end
 	Update()
 
-	ColorpickerAsset.Title:GetPropertyChangedSignal("TextBounds"):Connect(function()
+	Connect(ColorpickerAsset.Title:GetPropertyChangedSignal("TextBounds"), function()
 		ColorpickerAsset.Size = UDim2.new(1,0,0,ColorpickerAsset.Title.TextBounds.Y)
 	end)
-	ColorpickerAsset.MouseButton1Click:Connect(function()
+	Connect(ColorpickerAsset.MouseButton1Click, function()
 		if not PaletteAsset.Visible then
 			PaletteAsset.Visible = true
-			PaletteRender = RunService.RenderStepped:Connect(function()
+			PaletteRender = Connect(RunService.RenderStepped, function()
 				if not PaletteAsset.Visible then PaletteRender:Disconnect() end
 				PaletteAsset.Position = UDim2.new(0,(ColorpickerAsset.Color.AbsolutePosition.X - PaletteAsset.AbsoluteSize.X) + 20,0,ColorpickerAsset.Color.AbsolutePosition.Y + 52)
 			end)
@@ -1080,12 +1247,12 @@ local function InitColorpicker(Parent,ScreenAsset,Window,Colorpicker)
 			PaletteAsset.Visible = false
 		end
 	end)
-	PaletteAsset.SVPicker.InputBegan:Connect(function(Input)
+	Connect(PaletteAsset.SVPicker.InputBegan, function(Input)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 then
 			if SVRender then
 				SVRender:Disconnect()
 			end
-			SVRender = RunService.RenderStepped:Connect(function()
+			SVRender = Connect(RunService.RenderStepped, function()
 				if not PaletteAsset.Visible then SVRender:Disconnect() end
 				local Mouse = UserInputService:GetMouseLocation()
 				local ColorX = math.clamp(Mouse.X - PaletteAsset.SVPicker.AbsolutePosition.X,0,PaletteAsset.SVPicker.AbsoluteSize.X) / PaletteAsset.SVPicker.AbsoluteSize.X
@@ -1097,19 +1264,19 @@ local function InitColorpicker(Parent,ScreenAsset,Window,Colorpicker)
 			end)
 		end
 	end)
-	PaletteAsset.SVPicker.InputEnded:Connect(function(Input)
+	Connect(PaletteAsset.SVPicker.InputEnded, function(Input)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 then
 			if SVRender then
 				SVRender:Disconnect()
 			end
 		end
 	end)
-	PaletteAsset.Hue.InputBegan:Connect(function(Input)
+	Connect(PaletteAsset.Hue.InputBegan, function(Input)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 then
 			if HueRender then
 				HueRender:Disconnect()
 			end
-			HueRender = RunService.RenderStepped:Connect(function()
+			HueRender = Connect(RunService.RenderStepped, function()
 				if not PaletteAsset.Visible then HueRender:Disconnect() end
 				local Mouse = UserInputService:GetMouseLocation()
 				local ColorX = math.clamp(Mouse.X - PaletteAsset.Hue.AbsolutePosition.X,0,PaletteAsset.Hue.AbsoluteSize.X) / PaletteAsset.Hue.AbsoluteSize.X
@@ -1118,19 +1285,19 @@ local function InitColorpicker(Parent,ScreenAsset,Window,Colorpicker)
 			end)
 		end
 	end)
-	PaletteAsset.Hue.InputEnded:Connect(function(Input)
+	Connect(PaletteAsset.Hue.InputEnded, function(Input)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 then
 			if HueRender then
 				HueRender:Disconnect()
 			end
 		end
 	end)
-	PaletteAsset.Alpha.InputBegan:Connect(function(Input)
+	Connect(PaletteAsset.Alpha.InputBegan, function(Input)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 then
 			if AlphaRender then
 				AlphaRender:Disconnect()
 			end
-			AlphaRender = RunService.RenderStepped:Connect(function()
+			AlphaRender = Connect(RunService.RenderStepped, function()
 				if not PaletteAsset.Visible then AlphaRender:Disconnect() end
 				local Mouse = UserInputService:GetMouseLocation()
 				local ColorX = math.clamp(Mouse.X - PaletteAsset.Alpha.AbsolutePosition.X,0,PaletteAsset.Alpha.AbsoluteSize.X) / PaletteAsset.Alpha.AbsoluteSize.X
@@ -1139,7 +1306,7 @@ local function InitColorpicker(Parent,ScreenAsset,Window,Colorpicker)
 			end)
 		end
 	end)
-	PaletteAsset.Alpha.InputEnded:Connect(function(Input)
+	Connect(PaletteAsset.Alpha.InputEnded, function(Input)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 then
 			if AlphaRender then
 				AlphaRender:Disconnect()
@@ -1164,11 +1331,11 @@ local function InitColorpicker(Parent,ScreenAsset,Window,Colorpicker)
 
 	table.insert(Window.Colorable,PaletteAsset.Rainbow.Tick)
 	PaletteAsset.Rainbow.Tick.BackgroundColor3 = Colorpicker.Value[5] and Window.Color or Color3.fromRGB(60,60,60)
-	PaletteAsset.Rainbow.MouseButton1Click:Connect(function()
+	Connect(PaletteAsset.Rainbow.MouseButton1Click, function()
 		Colorpicker.Value[5] = not Colorpicker.Value[5]
 		PaletteAsset.Rainbow.Tick.BackgroundColor3 = Colorpicker.Value[5] and Window.Color or Color3.fromRGB(60,60,60)
 	end)
-	RunService.Heartbeat:Connect(function()
+	Connect(RunService.Heartbeat, function()
 		if Colorpicker.Value[5] then
 			if PaletteAsset.Visible then
 				Colorpicker.Value[1] = Window.RainbowHue
@@ -1183,7 +1350,7 @@ local function InitColorpicker(Parent,ScreenAsset,Window,Colorpicker)
 		end
 	end)
 
-	PaletteAsset.RGB.RGBBox.FocusLost:Connect(function(Enter)
+	Connect(PaletteAsset.RGB.RGBBox.FocusLost, function(Enter)
 		if not Enter then return end
 		local ColorString = string.split(string.gsub(PaletteAsset.RGB.RGBBox.Text," ",""),",")
 		local Hue,Saturation,Value = Color3.fromRGB(ColorString[1],ColorString[2],ColorString[3]):ToHSV()
@@ -1193,7 +1360,7 @@ local function InitColorpicker(Parent,ScreenAsset,Window,Colorpicker)
 		Colorpicker.Value[3] = Value
 		Update()
 	end)
-	PaletteAsset.HEX.HEXBox.FocusLost:Connect(function(Enter)
+	Connect(PaletteAsset.HEX.HEXBox.FocusLost, function(Enter)
 		if not Enter then return end
 		local Hue,Saturation,Value = Color3.fromHex("#" .. PaletteAsset.HEX.HEXBox.Text):ToHSV()
 		PaletteAsset.RGB.RGBBox.Text = ""
@@ -1202,9 +1369,11 @@ local function InitColorpicker(Parent,ScreenAsset,Window,Colorpicker)
 		Colorpicker.Value[3] = Value
 		Update()
 	end)
+	AttachVisibility(Colorpicker, ColorpickerAsset)
 end
 
 local Bracket = InitScreen()
+Bracket.Version = "3.2-skuff.1"
 function Bracket:Window(Window)
 	Window = GetType(Window,{},"table")
 	Window.Name = GetType(Window.Name,"Window","string")
@@ -1219,6 +1388,11 @@ function Bracket:Window(Window)
 	Window.Flags = {}
 
 	local WindowAsset = InitWindow(Bracket.ScreenAsset,Window)
+	Runtime.Windows[#Runtime.Windows + 1] = Window
+	Window._Asset = WindowAsset
+	function Window:Destroy()
+		Bracket:Destroy()
+	end
 	function Window:Tab(Tab)
 		Tab = GetType(Tab,{},"table")
 		Tab.Name = GetType(Tab.Name,"Tab","string")
@@ -1383,7 +1557,7 @@ function Bracket:Window(Window)
 		function Tab:Section(Section)
 			Section = GetType(Section,{},"table")
 			Section.Name = GetType(Section.Name,"Section","string")
-			local SectionContainer = InitSection(ChooseTab(Section.Side),Section)
+			local SectionContainer, SectionAsset = InitSection(ChooseTab(Section.Side),Section)
 
 			function Section:Divider(Divider)
 				Divider = GetType(Divider,{},"table")
@@ -1495,12 +1669,38 @@ function Bracket:Window(Window)
 	return Window
 end
 
+function Bracket:Destroy()
+	if Runtime.Destroyed then return end
+	Runtime.Destroyed = true
+	Runtime.Generation = Runtime.Generation + 1
+	for _, connection in ipairs(Runtime.Connections) do
+		DisconnectConnection(connection)
+	end
+	Runtime.Connections = {}
+	for _, screen in ipairs(Runtime.Screens) do
+		if screen and screen.Parent then
+			pcall(function() screen:Destroy() end)
+		end
+	end
+	Runtime.Screens = {}
+	Runtime.Windows = {}
+	Runtime.HiddenContainer = nil
+	pcall(function() RunService:SetRobloxGuiFocused(false) end)
+end
+
+function Bracket:RefreshAllLayouts()
+	for instance, refresh in pairs(Runtime.RefreshByInstance) do
+		if instance and instance.Parent and refresh then refresh() end
+	end
+end
+
 function Bracket:TableToColor(Table)
 	if type(Table) ~= "table" then return Table end
 	return Color3.fromHSV(Table[1],Table[2],Table[3])
 end
 
 function Bracket:Notification(Notification)
+	if Runtime.Destroyed or not Bracket.ScreenAsset or not Bracket.ScreenAsset.Parent then return end
 	Notification = GetType(Notification,{},"table")
 	Notification.Title = GetType(Notification.Title,"Title","string")
 	Notification.Description = GetType(Notification.Description,"Description","string")
@@ -1522,6 +1722,7 @@ function Bracket:Notification(Notification)
 	if Notification.Duration then
 		task.spawn(function()
 			for Time = Notification.Duration,1,-1 do
+				if Runtime.Destroyed or not NotificationAsset.Parent then return end
 				NotificationAsset.Title.Close.Text = Time
 				task.wait(1)
 			end
@@ -1533,13 +1734,14 @@ function Bracket:Notification(Notification)
 			NotificationAsset:Destroy()
 		end)
 	else
-		NotificationAsset.Title.Close.MouseButton1Click:Connect(function()
+		Connect(NotificationAsset.Title.Close.MouseButton1Click, function()
 			NotificationAsset:Destroy()
 		end)
 	end
 end
 
 function Bracket:Notification2(Notification)
+	if Runtime.Destroyed or not Bracket.ScreenAsset or not Bracket.ScreenAsset.Parent then return end
 	Notification = GetType(Notification,{},"table")
 	Notification.Title = GetType(Notification.Title,"Title","string")
 	Notification.Duration = GetType(Notification.Duration,5,"number")
@@ -1568,7 +1770,9 @@ function Bracket:Notification2(Notification)
 
 	TweenSize(NotificationAsset.Main.Size.X.Offset + 4,
 	NotificationAsset.Main.Size.Y.Offset + 4,function()
-		task.wait(Notification.Duration) TweenSize(0,
+		task.wait(Notification.Duration)
+		if Runtime.Destroyed or not NotificationAsset.Parent then return end
+		TweenSize(0,
 		NotificationAsset.Main.Size.Y.Offset + 4,function()
 			if Notification.Callback then
 				Notification.Callback()
