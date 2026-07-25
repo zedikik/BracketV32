@@ -113,6 +113,17 @@ local function AttachVisibility(api, asset)
     end
 end
 
+local function IsRuntimeVisible(api)
+    if not api or api._Visible == false then return false end
+    local current = api._Asset
+    if not current or not current.Parent then return false end
+    while current do
+        if current == Runtime.HiddenContainer then return false end
+        current = current.Parent
+    end
+    return true
+end
+
 local Debug,LocalPlayer = false,PlayerService.LocalPlayer
 local MainAssetFolder = Debug and ReplicatedStorage.BracketV32
 	or InsertService:LoadLocalAsset("rbxassetid://9153139105")
@@ -720,7 +731,15 @@ local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 			ToggleAsset.Title.Size = UDim2.new(1,-ToggleAsset.Keybind.Size.X.Offset - 20,1,0)
 		end)
 
-		Connect(UserInputService.InputBegan, function(Input)
+		Keybind.AcceptedPress = nil
+		Connect(UserInputService.InputBegan, function(Input, Processed)
+			if Processed
+				or UserInputService:GetFocusedTextBox()
+				or not IsRuntimeVisible(Keybind)
+			then
+				return
+			end
+
 			local Key = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
 			if Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.Keyboard then
 				if not table.find(Keybind.Blacklist,Key) then
@@ -738,58 +757,54 @@ local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 				Keybind.WaitingForBind = false
 				Window.Flags[Keybind.Flag] = Keybind.Value
 				Keybind.Callback(Keybind.Value,false)
-			elseif Input.UserInputType == Enum.UserInputType.Keyboard then
-				if Key == Keybind.Value then
-					Toggle.Value = not Toggle.Value 
+			elseif Input.UserInputType == Enum.UserInputType.Keyboard and Key == Keybind.Value then
+				Toggle.Value = not Toggle.Value
+				Window.Flags[Toggle.Flag] = Toggle.Value
+				Keybind.AcceptedPress = {Type = "Keyboard", Key = Key}
+
+				Toggle.Callback(Toggle.Value)
+				Keybind.Callback(Keybind.Value,true)
+				ToggleAsset.Tick.BackgroundColor3 = Toggle.Value and Window.Color or Color3.fromRGB(60,60,60)
+			end
+
+			if Keybind.Mouse then
+				local MouseKey = tostring(Input.UserInputType):gsub("Enum.UserInputType.","")
+				local IsMouseButton = Input.UserInputType == Enum.UserInputType.MouseButton1
+					or Input.UserInputType == Enum.UserInputType.MouseButton2
+					or Input.UserInputType == Enum.UserInputType.MouseButton3
+
+				if Keybind.WaitingForBind and IsMouseButton then
+					ToggleAsset.Keybind.Text = "[ " .. MouseKey .. " ]"
+					Keybind.Value = MouseKey
+					Keybind.WaitingForBind = false
+					Window.Flags[Keybind.Flag] = Keybind.Value
+					Keybind.Callback(Keybind.Value,false)
+				elseif IsMouseButton and MouseKey == Keybind.Value then
+					Toggle.Value = not Toggle.Value
 					Window.Flags[Toggle.Flag] = Toggle.Value
+					Keybind.AcceptedPress = {Type = "Mouse", Key = MouseKey}
 
 					Toggle.Callback(Toggle.Value)
 					Keybind.Callback(Keybind.Value,true)
 					ToggleAsset.Tick.BackgroundColor3 = Toggle.Value and Window.Color or Color3.fromRGB(60,60,60)
 				end
 			end
-			if Keybind.Mouse then
-				local Key = tostring(Input.UserInputType):gsub("Enum.UserInputType.","")
-				if Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.MouseButton1
-					or Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.MouseButton2
-					or Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.MouseButton3 then
-					ToggleAsset.Keybind.Text = "[ " .. Key .. " ]"
-
-					Keybind.Value = Key
-					Keybind.WaitingForBind = false
-					Window.Flags[Keybind.Flag] = Keybind.Value
-					Keybind.Callback(Keybind.Value,false)
-				elseif Input.UserInputType == Enum.UserInputType.MouseButton1
-					or Input.UserInputType == Enum.UserInputType.MouseButton2
-					or Input.UserInputType == Enum.UserInputType.MouseButton3 then
-
-					if Key == Keybind.Value then
-						Toggle.Value = not Toggle.Value
-						Window.Flags[Toggle.Flag] = Toggle.Value
-
-						Toggle.Callback(Toggle.Value)
-						Keybind.Callback(Keybind.Value,true)
-						ToggleAsset.Tick.BackgroundColor3 = Toggle.Value and Window.Color or Color3.fromRGB(60,60,60)
-					end
-				end
-			end
 		end)
 		Connect(UserInputService.InputEnded, function(Input)
-			local Key = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
-			if Input.UserInputType == Enum.UserInputType.Keyboard then
-				if Key == Keybind.Value then
+			local accepted = Keybind.AcceptedPress
+			if not accepted then return end
+
+			if accepted.Type == "Keyboard" and Input.UserInputType == Enum.UserInputType.Keyboard then
+				local Key = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
+				if Key == accepted.Key then
+					Keybind.AcceptedPress = nil
 					Keybind.Callback(Keybind.Value,false)
 				end
-			end
-			if Keybind.Mouse then
-				local Key = tostring(Input.UserInputType):gsub("Enum.UserInputType.","")
-				if Input.UserInputType == Enum.UserInputType.MouseButton1
-					or Input.UserInputType == Enum.UserInputType.MouseButton2
-					or Input.UserInputType == Enum.UserInputType.MouseButton3 then
-
-					if Key == Keybind.Value then
-						Keybind.Callback(Keybind.Value,false)
-					end
+			elseif accepted.Type == "Mouse" then
+				local MouseKey = tostring(Input.UserInputType):gsub("Enum.UserInputType.","")
+				if MouseKey == accepted.Key then
+					Keybind.AcceptedPress = nil
+					Keybind.Callback(Keybind.Value,false)
 				end
 			end
 		end)
@@ -797,6 +812,7 @@ local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 			ToggleAsset.Keybind.Text = "[ " .. tostring(Key) .. " ]"
 			Keybind.Value = Key
 			Keybind.WaitingForBind = false
+			Keybind.AcceptedPress = nil
 			Window.Flags[Keybind.Flag] = Keybind.Value
 			Keybind.Callback(Keybind.Value,false)
 		end
@@ -960,7 +976,15 @@ local function InitKeybind(Parent,ScreenAsset,Window,Keybind)
 		KeybindAsset.Value.Size = UDim2.new(0,KeybindAsset.Value.TextBounds.X,1,0)
 		KeybindAsset.Title.Size = UDim2.new(1,-KeybindAsset.Value.Size.X.Offset,1,0)
 	end)
-	Connect(UserInputService.InputBegan, function(Input)
+	Keybind.AcceptedPress = nil
+	Connect(UserInputService.InputBegan, function(Input, Processed)
+		if Processed
+			or UserInputService:GetFocusedTextBox()
+			or not IsRuntimeVisible(Keybind)
+		then
+			return
+		end
+
 		local Key = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
 		if Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.Keyboard then
 			if not table.find(Keybind.Blacklist,Key) then
@@ -978,54 +1002,49 @@ local function InitKeybind(Parent,ScreenAsset,Window,Keybind)
 			Keybind.WaitingForBind = false
 			Window.Flags[Keybind.Flag] = Keybind.Value
 			Keybind.Callback(Keybind.Value,false,Keybind.Toggle)
-		elseif Input.UserInputType == Enum.UserInputType.Keyboard then
-			if Key == Keybind.Value then
-				Keybind.Toggle = not Keybind.Toggle
-				Keybind.Callback(Keybind.Value,true,Keybind.Toggle)
-			end
+		elseif Input.UserInputType == Enum.UserInputType.Keyboard and Key == Keybind.Value then
+			Keybind.Toggle = not Keybind.Toggle
+			Keybind.AcceptedPress = {Type = "Keyboard", Key = Key}
+			Keybind.Callback(Keybind.Value,true,Keybind.Toggle)
 		end
-		if Keybind.Mouse then
-			local Key = tostring(Input.UserInputType):gsub("Enum.UserInputType.","")
-			if Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.MouseButton1
-				or Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.MouseButton2
-				or Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.MouseButton3 then
-				KeybindAsset.Value.Text = "[ " .. Key .. " ]"
 
-				Keybind.Value = Key
+		if Keybind.Mouse then
+			local MouseKey = tostring(Input.UserInputType):gsub("Enum.UserInputType.","")
+			local IsMouseButton = Input.UserInputType == Enum.UserInputType.MouseButton1
+				or Input.UserInputType == Enum.UserInputType.MouseButton2
+				or Input.UserInputType == Enum.UserInputType.MouseButton3
+
+			if Keybind.WaitingForBind and IsMouseButton then
+				KeybindAsset.Value.Text = "[ " .. MouseKey .. " ]"
+				Keybind.Value = MouseKey
 				Keybind.WaitingForBind = false
 				Window.Flags[Keybind.Flag] = Keybind.Value
 				Keybind.Callback(Keybind.Value,false,Keybind.Toggle)
-			elseif Input.UserInputType == Enum.UserInputType.MouseButton1
-				or Input.UserInputType == Enum.UserInputType.MouseButton2
-				or Input.UserInputType == Enum.UserInputType.MouseButton3 then
-
-				if Key == Keybind.Value then
-					Keybind.Toggle = not Keybind.Toggle
-					Keybind.Callback(Keybind.Value,true,Keybind.Toggle)
-				end
+			elseif IsMouseButton and MouseKey == Keybind.Value then
+				Keybind.Toggle = not Keybind.Toggle
+				Keybind.AcceptedPress = {Type = "Mouse", Key = MouseKey}
+				Keybind.Callback(Keybind.Value,true,Keybind.Toggle)
 			end
 		end
 	end)
 	Connect(UserInputService.InputEnded, function(Input)
-		local Key = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
-		if Input.UserInputType == Enum.UserInputType.Keyboard then
-			if Key == Keybind.Value then
+		local accepted = Keybind.AcceptedPress
+		if not accepted then return end
+
+		if accepted.Type == "Keyboard" and Input.UserInputType == Enum.UserInputType.Keyboard then
+			local Key = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
+			if Key == accepted.Key then
+				Keybind.AcceptedPress = nil
+				Keybind.Callback(Keybind.Value,false,Keybind.Toggle)
+			end
+		elseif accepted.Type == "Mouse" then
+			local MouseKey = tostring(Input.UserInputType):gsub("Enum.UserInputType.","")
+			if MouseKey == accepted.Key then
+				Keybind.AcceptedPress = nil
 				Keybind.Callback(Keybind.Value,false,Keybind.Toggle)
 			end
 		end
-		if Keybind.Mouse then
-			local Key = tostring(Input.UserInputType):gsub("Enum.UserInputType.","")
-			if Input.UserInputType == Enum.UserInputType.MouseButton1
-				or Input.UserInputType == Enum.UserInputType.MouseButton2
-				or Input.UserInputType == Enum.UserInputType.MouseButton3 then
-
-				if Key == Keybind.Value then
-					Keybind.Callback(Keybind.Value,false,Keybind.Toggle)
-				end
-			end
-		end
 	end)
-
 
 	function Keybind:SetName(Name)
 		Keybind.Name = Name
@@ -1035,6 +1054,7 @@ local function InitKeybind(Parent,ScreenAsset,Window,Keybind)
 		KeybindAsset.Value.Text = "[ " .. tostring(Key) .. " ]"
 		Keybind.Value = Key
 		Keybind.WaitingForBind = false
+		Keybind.AcceptedPress = nil
 		Window.Flags[Keybind.Flag] = Keybind.Value
 		Keybind.Callback(Keybind.Value,false,Keybind.Toggle)
 	end
@@ -1387,7 +1407,7 @@ local function InitColorpicker(Parent,ScreenAsset,Window,Colorpicker)
 end
 
 local Bracket = InitScreen()
-Bracket.Version = "3.2-skuff.1"
+Bracket.Version = "3.2-skuff.2"
 function Bracket:Window(Window)
 	Window = GetType(Window,{},"table")
 	Window.Name = GetType(Window.Name,"Window","string")
