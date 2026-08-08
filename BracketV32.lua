@@ -15,6 +15,11 @@ local Runtime = {
     Generation = 0,
     HiddenContainer = nil,
     RefreshByInstance = setmetatable({}, {__mode = "k"}),
+    SearchEntries = {},
+    Sections = {},
+    BindRegistry = {},
+    SearchQuery = "",
+    ConfirmDialog = nil,
 }
 
 local function TrackConnection(connection)
@@ -65,31 +70,31 @@ local function AttachVisibility(api, asset)
     if not api or not asset then return end
     api._Asset = asset
     api._Visible = true
+    api._SearchVisible = true
     api._OriginalParent = asset.Parent
     api._OriginalLayoutOrder = asset.LayoutOrder
     api._OriginalVisible = asset:IsA("GuiObject") and asset.Visible or nil
     api._OriginalActive = asset:IsA("GuiObject") and asset.Active or nil
-    function api:SetVisible(value)
-        value = value == true
-        if self._Visible == value then return end
-        self._Visible = value
+
+    local function applyVisibility()
+        local value = api._Visible == true and api._SearchVisible ~= false
         if value then
-            local parent = self._OriginalParent
+            local parent = api._OriginalParent
             if parent and parent.Parent then
-                asset.LayoutOrder = self._OriginalLayoutOrder
+                asset.LayoutOrder = api._OriginalLayoutOrder
                 asset.Parent = parent
                 if asset:IsA("GuiObject") then
-                    asset.Visible = self._OriginalVisible ~= false
-                    asset.Active = self._OriginalActive == true
+                    asset.Visible = api._OriginalVisible ~= false
+                    asset.Active = api._OriginalActive == true
                 end
             end
         else
             if asset.Parent and asset.Parent ~= Runtime.HiddenContainer then
-                self._OriginalParent = asset.Parent
-                self._OriginalLayoutOrder = asset.LayoutOrder
+                api._OriginalParent = asset.Parent
+                api._OriginalLayoutOrder = asset.LayoutOrder
                 if asset:IsA("GuiObject") then
-                    self._OriginalVisible = asset.Visible
-                    self._OriginalActive = asset.Active
+                    api._OriginalVisible = asset.Visible
+                    api._OriginalActive = asset.Active
                 end
             end
             if asset:IsA("GuiObject") then
@@ -106,15 +111,40 @@ local function AttachVisibility(api, asset)
             end
             asset.Parent = Runtime.HiddenContainer
         end
-        QueueRefresh(self._OriginalParent or asset)
+        QueueRefresh(api._OriginalParent or asset)
+    end
+
+    function api:SetVisible(value)
+        value = value == true
+        if self._Visible == value then return end
+        self._Visible = value
+        applyVisibility()
+    end
+    function api:_SetSearchVisible(value)
+        value = value == true
+        if self._SearchVisible == value then return end
+        self._SearchVisible = value
+        applyVisibility()
     end
     function api:IsVisible()
         return self._Visible == true
     end
+    function api:IsEffectivelyVisible()
+        return self._Visible == true and self._SearchVisible ~= false
+    end
+    api._ApplyVisibility = applyVisibility
+end
+
+local function RegisterSearchEntry(api, name, section, tab)
+    if not api then return end
+    api._SearchName = tostring(name or "")
+    api._SearchSection = section
+    api._SearchTab = tab
+    Runtime.SearchEntries[#Runtime.SearchEntries + 1] = api
 end
 
 local function IsRuntimeVisible(api)
-    if not api or api._Visible == false then return false end
+    if not api or api._Visible == false or api._SearchVisible == false then return false end
     local current = api._Asset
     if not current or not current.Parent then return false end
     while current do
@@ -299,12 +329,39 @@ local function InitWindow(ScreenAsset,Window)
 	WindowAsset.Position = Window.Position
 	WindowAsset.Size = Window.Size
 
+	local uiScale = Instance.new("UIScale")
+	uiScale.Name = "BracketUIScale"
+	uiScale.Scale = Window.Scale or 1
+	uiScale.Parent = WindowAsset
+	Window._UIScale = uiScale
+
 	MakeDraggable(WindowAsset.Drag,WindowAsset,function(Position)
 		Window.Position = Position
+		Window.Flags["UI/Window/Position"] = {Position.X.Scale,Position.X.Offset,Position.Y.Scale,Position.Y.Offset}
 	end)
 	MakeResizeable(WindowAsset.Resize,WindowAsset,Vector2.new(296,296),function(Size)
 		Window.Size = Size
+		Window.Flags["UI/Window/Size"] = {Size.X.Offset,Size.Y.Offset}
 	end)
+
+	local searchBox = Instance.new("TextBox")
+	searchBox.Name = "GlobalSearch"
+	searchBox.BackgroundColor3 = Color3.fromRGB(22,22,22)
+	searchBox.BorderColor3 = Window.Color
+	searchBox.BorderSizePixel = 1
+	searchBox.ClearTextOnFocus = false
+	searchBox.PlaceholderText = "Search functions..."
+	searchBox.PlaceholderColor3 = Color3.fromRGB(135,135,135)
+	searchBox.Text = ""
+	searchBox.TextColor3 = Color3.fromRGB(235,235,235)
+	searchBox.TextSize = 12
+	searchBox.Font = Enum.Font.Code
+	searchBox.TextXAlignment = Enum.TextXAlignment.Left
+	searchBox.Position = UDim2.new(1,-190,0,3)
+	searchBox.Size = UDim2.new(0,184,0,18)
+	searchBox.ZIndex = 25
+	searchBox.Parent = WindowAsset
+	Window.SearchBox = searchBox
 
 	Connect(WindowAsset.TabButtonContainer.ListLayout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
 		WindowAsset.TabButtonContainer.CanvasSize = UDim2.new(0,WindowAsset.TabButtonContainer.ListLayout.AbsoluteContentSize.X,0,0)
@@ -322,6 +379,93 @@ local function InitWindow(ScreenAsset,Window)
 			Window.RainbowHue = 0
 		end]]
 	end)
+	local function applySearch(query)
+		query = tostring(query or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+		Runtime.SearchQuery = query
+		local sectionMatches = setmetatable({}, {__mode = "k"})
+		for _, api in ipairs(Runtime.SearchEntries) do
+			if api and api._Asset then
+				local haystack = table.concat({
+					tostring(api._SearchName or ""),
+					tostring(api._SearchSection and api._SearchSection.Name or ""),
+					tostring(api._SearchTab and api._SearchTab.Name or ""),
+				}, " "):lower()
+				local match = query == "" or haystack:find(query, 1, true) ~= nil
+				if api._SearchSection and match then sectionMatches[api._SearchSection] = true end
+				if type(api._SetSearchVisible) == "function" then api:_SetSearchVisible(match) end
+			end
+		end
+		for _, section in ipairs(Runtime.Sections) do
+			if section and section._Asset and type(section._SetSearchVisible) == "function" then
+				local ownMatch = query == "" or tostring(section.Name or ""):lower():find(query, 1, true) ~= nil
+				section:_SetSearchVisible(ownMatch or sectionMatches[section] == true)
+			end
+		end
+		for _, window in ipairs(Runtime.Windows) do
+			for _, tab in ipairs(window.Tabs or {}) do
+				if tab and type(tab.RefreshLayout) == "function" then tab:RefreshLayout() end
+			end
+		end
+	end
+	function Window:ApplySearch(query)
+		searchBox.Text = tostring(query or "")
+		applySearch(query)
+	end
+	function Window:GetSearchQuery()
+		return Runtime.SearchQuery
+	end
+	Connect(searchBox:GetPropertyChangedSignal("Text"), function()
+		applySearch(searchBox.Text)
+	end)
+
+	function Window:SetScale(scale)
+		scale = math.clamp(tonumber(scale) or 1, 0.65, 1.5)
+		Window.Scale = scale
+		uiScale.Scale = scale
+		Window.Flags["UI/Scale"] = scale
+	end
+	function Window:SetFont(fontName)
+		fontName = tostring(fontName or "Code")
+		local font = Enum.Font[fontName] or Enum.Font.Code
+		Window.Font = fontName
+		Window.Flags["UI/Font"] = fontName
+		for _, object in ipairs(WindowAsset:GetDescendants()) do
+			if object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then
+				pcall(function() object.Font = font end)
+			end
+		end
+	end
+	function Window:SetTheme(themeName)
+		themeName = tostring(themeName or "Dark")
+		Window.Theme = themeName
+		Window.Flags["UI/Theme"] = themeName
+		local background = themeName == "Light" and Color3.fromRGB(225,225,225)
+			or themeName == "Darker" and Color3.fromRGB(10,10,10)
+			or Color3.fromRGB(18,18,18)
+		local textColor = themeName == "Light" and Color3.fromRGB(25,25,25) or Color3.fromRGB(235,235,235)
+		for _, object in ipairs(WindowAsset:GetDescendants()) do
+			if object:IsA("Frame") and object.BackgroundTransparency < 0.95 then
+				pcall(function() object.BackgroundColor3 = background end)
+			elseif object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then
+				pcall(function() object.TextColor3 = textColor end)
+			end
+		end
+		searchBox.BackgroundColor3 = background
+		searchBox.TextColor3 = textColor
+	end
+	function Window:GetBindConflicts()
+		local byKey, conflicts = {}, {}
+		for _, element in ipairs(Window.Elements) do
+			if element._IsKeybind and element.Value and element.Value ~= "NONE" then
+				byKey[element.Value] = byKey[element.Value] or {}
+				table.insert(byKey[element.Value], element)
+			end
+		end
+		for key, items in pairs(byKey) do
+			if #items > 1 then conflicts[key] = items end
+		end
+		return conflicts
+	end
 	function Window:SetName(Name)
 		Window.Name = Name
 		WindowAsset.Title.Text = Name
@@ -472,6 +616,35 @@ local function InitWindow(ScreenAsset,Window)
 		end
 	end
 
+	Window.Flags["UI/Window/Size"] = {Window.Size.X.Offset,Window.Size.Y.Offset}
+	Window.Flags["UI/Window/Position"] = {Window.Position.X.Scale,Window.Position.X.Offset,Window.Position.Y.Scale,Window.Position.Y.Offset}
+	Window.Flags["UI/Scale"] = Window.Scale or 1
+	Window.Flags["UI/Theme"] = Window.Theme or "Dark"
+	Window.Flags["UI/Font"] = Window.Font or "Code"
+	local sizeElement = {Flag = "UI/Window/Size", IgnoreFlag = false}
+	function sizeElement:SetValue(value)
+		if type(value) == "table" and tonumber(value[1]) and tonumber(value[2]) then
+			Window:SetSize(UDim2.fromOffset(math.max(296,tonumber(value[1])),math.max(296,tonumber(value[2]))))
+		end
+	end
+	local positionElement = {Flag = "UI/Window/Position", IgnoreFlag = false}
+	function positionElement:SetValue(value)
+		if type(value) == "table" and #value >= 4 then
+			Window:SetPosition(UDim2.new(tonumber(value[1]) or 0.5,tonumber(value[2]) or 0,tonumber(value[3]) or 0.5,tonumber(value[4]) or 0))
+		end
+	end
+	local scaleElement = {Flag = "UI/Scale", IgnoreFlag = false}
+	function scaleElement:SetValue(value) Window:SetScale(value) end
+	local themeElement = {Flag = "UI/Theme", IgnoreFlag = false}
+	function themeElement:SetValue(value) Window:SetTheme(value) end
+	local fontElement = {Flag = "UI/Font", IgnoreFlag = false}
+	function fontElement:SetValue(value) Window:SetFont(value) end
+	Window.Elements[#Window.Elements+1] = sizeElement
+	Window.Elements[#Window.Elements+1] = positionElement
+	Window.Elements[#Window.Elements+1] = scaleElement
+	Window.Elements[#Window.Elements+1] = themeElement
+	Window.Elements[#Window.Elements+1] = fontElement
+
 	Window.Background = WindowAsset.Background
 	return WindowAsset
 end
@@ -544,6 +717,10 @@ local function InitTab(ScreenAsset,WindowAsset,Window,Tab)
 	end
 	Tab._Asset = TabAsset
 	Tab._ScheduleUpdate = scheduleUpdate
+	Tab.Sections = Tab.Sections or {}
+	Tab._SearchName = Tab.Name
+	Window.Tabs = Window.Tabs or {}
+	Window.Tabs[#Window.Tabs + 1] = Tab
 	scheduleUpdate()
 
 	return function(Side)
@@ -568,7 +745,7 @@ local function InitSection(Parent,Section)
 		task.defer(function()
 			updateQueued = false
 			if Runtime.Destroyed or generation ~= Runtime.Generation or not SectionAsset.Parent then return end
-			local height = math.ceil(listLayout.AbsoluteContentSize.Y + 15)
+			local height = Section.Collapsed and 12 or math.ceil(listLayout.AbsoluteContentSize.Y + 15)
 			if math.abs(height - lastHeight) >= 1 then
 				lastHeight = height
 				SectionAsset.Size = UDim2.new(1,0,0,height)
@@ -590,7 +767,36 @@ local function InitSection(Parent,Section)
 	function Section:RefreshLayout()
 		refreshLayout()
 	end
+	Section.Collapsed = false
+	local collapseButton = Instance.new("TextButton")
+	collapseButton.Name = "Collapse"
+	collapseButton.BackgroundTransparency = 1
+	collapseButton.Text = "[-]"
+	collapseButton.TextColor3 = Color3.fromRGB(190,190,190)
+	collapseButton.TextSize = 12
+	collapseButton.Font = Enum.Font.Code
+	collapseButton.Size = UDim2.fromOffset(24,14)
+	collapseButton.Position = UDim2.new(1,-25,0,-7)
+	collapseButton.ZIndex = 20
+	collapseButton.Parent = SectionAsset
+	function Section:SetCollapsed(value)
+		value = value == true
+		if self.Collapsed == value then return end
+		self.Collapsed = value
+		SectionAsset.Container.Visible = not value
+		SectionAsset.Container.Active = not value
+		collapseButton.Text = value and "[+]" or "[-]"
+		if value then
+			SectionAsset.Size = UDim2.new(1,0,0,12)
+		else
+			refreshLayout()
+		end
+		if tabRefresh then tabRefresh() end
+	end
+	function Section:IsCollapsed() return self.Collapsed == true end
+	Connect(collapseButton.MouseButton1Click, function() Section:SetCollapsed(not Section.Collapsed) end)
 	AttachVisibility(Section, SectionAsset)
+	Runtime.Sections[#Runtime.Sections + 1] = Section
 	refreshLayout()
 
 	return SectionAsset.Container, SectionAsset
@@ -620,6 +826,7 @@ local function InitDivider(Parent,Divider)
 		DividerAsset.Title.Text = Text
 	end
 	AttachVisibility(Divider, DividerAsset)
+	RegisterSearchEntry(Divider, Divider.Text)
 end
 local function InitLabel(Parent,Label)
 	local LabelAsset = GetAsset("Label/Label")
@@ -636,6 +843,7 @@ local function InitLabel(Parent,Label)
 		LabelAsset.Text = Text
 	end
 	AttachVisibility(Label, LabelAsset)
+	RegisterSearchEntry(Label, Label.Text)
 end
 local function InitButton(Parent,ScreenAsset,Window,Button)
 	local ButtonAsset = GetAsset("Button/Button")
@@ -672,6 +880,7 @@ local function InitButton(Parent,ScreenAsset,Window,Button)
 		InitToolTip(ButtonAsset,ScreenAsset,Text)
 	end
 	AttachVisibility(Button, ButtonAsset)
+	RegisterSearchEntry(Button, Button.Name)
 end
 local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 	local ToggleAsset = GetAsset("Toggle/Toggle")
@@ -731,6 +940,44 @@ local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 			ToggleAsset.Title.Size = UDim2.new(1,-ToggleAsset.Keybind.Size.X.Offset - 20,1,0)
 		end)
 
+		Keybind._IsKeybind = true
+		local function commitBind(newValue)
+			newValue = tostring(newValue or "NONE")
+			local conflict
+			if newValue ~= "NONE" then
+				for _, element in ipairs(Window.Elements) do
+					if element ~= Keybind and element._IsKeybind and element.Value == newValue then
+						conflict = element
+						break
+					end
+				end
+			end
+			local function assign()
+				if conflict and type(conflict.SetValue) == "function" then conflict:SetValue("NONE", true) end
+				Keybind.Value = newValue
+				Keybind.WaitingForBind = false
+				Keybind.AcceptedPress = nil
+				ToggleAsset.Keybind.Text = "[ " .. newValue .. " ]"
+				Window.Flags[Keybind.Flag] = newValue
+				Keybind.Callback(newValue,false)
+			end
+			if conflict and Bracket and type(Bracket.Confirm) == "function" then
+				Bracket:Confirm({
+					Title = "Bind conflict",
+					Description = string.format("%s is already assigned to %s. Replace it?", newValue, tostring(conflict.Name or conflict.Flag)),
+					ConfirmText = "Replace",
+					CancelText = "Cancel",
+					OnConfirm = assign,
+					OnCancel = function()
+						Keybind.WaitingForBind = false
+						ToggleAsset.Keybind.Text = "[ " .. tostring(Keybind.Value) .. " ]"
+					end,
+				})
+			else
+				assign()
+			end
+		end
+
 		Keybind.AcceptedPress = nil
 		Connect(UserInputService.InputBegan, function(Input, Processed)
 			if Processed
@@ -743,20 +990,13 @@ local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 			local Key = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
 			if Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.Keyboard then
 				if not table.find(Keybind.Blacklist,Key) then
-					ToggleAsset.Keybind.Text = "[ " .. Key .. " ]"
-					Keybind.Value = Key
+					commitBind(Key)
+				elseif Keybind.DoNotClear then
+					Keybind.WaitingForBind = false
+					ToggleAsset.Keybind.Text = "[ " .. Keybind.Value .. " ]"
 				else
-					if Keybind.DoNotClear then
-						ToggleAsset.Keybind.Text = "[ " .. Keybind.Value .. " ]"
-					else
-						ToggleAsset.Keybind.Text = "[ NONE ]"
-						Keybind.Value = "NONE"
-					end
+					commitBind("NONE")
 				end
-
-				Keybind.WaitingForBind = false
-				Window.Flags[Keybind.Flag] = Keybind.Value
-				Keybind.Callback(Keybind.Value,false)
 			elseif Input.UserInputType == Enum.UserInputType.Keyboard and Key == Keybind.Value then
 				Toggle.Value = not Toggle.Value
 				Window.Flags[Toggle.Flag] = Toggle.Value
@@ -774,11 +1014,7 @@ local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 					or Input.UserInputType == Enum.UserInputType.MouseButton3
 
 				if Keybind.WaitingForBind and IsMouseButton then
-					ToggleAsset.Keybind.Text = "[ " .. MouseKey .. " ]"
-					Keybind.Value = MouseKey
-					Keybind.WaitingForBind = false
-					Window.Flags[Keybind.Flag] = Keybind.Value
-					Keybind.Callback(Keybind.Value,false)
+					commitBind(MouseKey)
 				elseif IsMouseButton and MouseKey == Keybind.Value then
 					Toggle.Value = not Toggle.Value
 					Window.Flags[Toggle.Flag] = Toggle.Value
@@ -808,13 +1044,13 @@ local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 				end
 			end
 		end)
-		function Keybind:SetValue(Key)
-			ToggleAsset.Keybind.Text = "[ " .. tostring(Key) .. " ]"
-			Keybind.Value = Key
+		function Keybind:SetValue(Key, silent)
+			Keybind.Value = tostring(Key or "NONE")
+			ToggleAsset.Keybind.Text = "[ " .. Keybind.Value .. " ]"
 			Keybind.WaitingForBind = false
 			Keybind.AcceptedPress = nil
 			Window.Flags[Keybind.Flag] = Keybind.Value
-			Keybind.Callback(Keybind.Value,false)
+			if not silent then Keybind.Callback(Keybind.Value,false) end
 		end
 		function Keybind:SetCallback(Callback)
 			Keybind.Callback = Callback
@@ -824,6 +1060,7 @@ local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 		return Keybind
 	end
 	AttachVisibility(Toggle, ToggleAsset)
+	RegisterSearchEntry(Toggle, Toggle.Name)
 end
 local function InitSlider(Parent,ScreenAsset,Window,Slider)
 	local SliderAsset = GetAsset("Slider/Slider")
@@ -910,6 +1147,7 @@ local function InitSlider(Parent,ScreenAsset,Window,Slider)
 		end
 	end)
 	AttachVisibility(Slider, SliderAsset)
+	RegisterSearchEntry(Slider, Slider.Name)
 end
 local function InitTextbox(Parent,ScreenAsset,Window,Textbox)
 	local TextboxAsset = GetAsset("Textbox/Textbox")
@@ -956,6 +1194,7 @@ local function InitTextbox(Parent,ScreenAsset,Window,Textbox)
 		InitToolTip(TextboxAsset,ScreenAsset,Text)
 	end
 	AttachVisibility(Textbox, TextboxAsset)
+	RegisterSearchEntry(Textbox, Textbox.Name)
 end
 local function InitKeybind(Parent,ScreenAsset,Window,Keybind)
 	local KeybindAsset = GetAsset("Keybind/Keybind")
@@ -964,6 +1203,35 @@ local function InitKeybind(Parent,ScreenAsset,Window,Keybind)
 	KeybindAsset.Title.Text = Keybind.Name
 	KeybindAsset.Value.Text = "[ " .. Keybind.Value .. " ]"
 	Keybind.WaitingForBind = false
+	Keybind._IsKeybind = true
+	local function commitBind(newValue)
+		newValue = tostring(newValue or "NONE")
+		local conflict
+		if newValue ~= "NONE" then
+			for _, element in ipairs(Window.Elements) do
+				if element ~= Keybind and element._IsKeybind and element.Value == newValue then conflict = element break end
+			end
+		end
+		local function assign()
+			if conflict and type(conflict.SetValue) == "function" then conflict:SetValue("NONE", true) end
+			Keybind.Value = newValue
+			KeybindAsset.Value.Text = "[ " .. newValue .. " ]"
+			Window.Flags[Keybind.Flag] = newValue
+			Keybind.Callback(newValue,false,Keybind.Toggle)
+		end
+		if conflict and Bracket and type(Bracket.Confirm) == "function" then
+			Bracket:Confirm({
+				Title = "Bind conflict",
+				Description = string.format("%s is already assigned to %s. Replace it?", newValue, tostring(conflict.Name or conflict.Flag)),
+				ConfirmText = "Replace",
+				CancelText = "Cancel",
+				OnConfirm = assign,
+				OnCancel = function() KeybindAsset.Value.Text = "[ " .. tostring(Keybind.Value) .. " ]" end,
+			})
+		else
+			assign()
+		end
+	end
 
 	Connect(KeybindAsset.MouseButton1Click, function()
 		KeybindAsset.Value.Text = "[ ... ]"
@@ -988,20 +1256,16 @@ local function InitKeybind(Parent,ScreenAsset,Window,Keybind)
 		local Key = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
 		if Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.Keyboard then
 			if not table.find(Keybind.Blacklist,Key) then
-				KeybindAsset.Value.Text = "[ " .. Key .. " ]"
-				Keybind.Value = Key
+				commitBind(Key)
 			else
 				if Keybind.DoNotClear then
 					KeybindAsset.Value.Text = "[ " .. Keybind.Value .. " ]"
 				else
-					KeybindAsset.Value.Text = "[ NONE ]"
-					Keybind.Value = "NONE"
+					commitBind("NONE")
 				end
 			end
 
 			Keybind.WaitingForBind = false
-			Window.Flags[Keybind.Flag] = Keybind.Value
-			Keybind.Callback(Keybind.Value,false,Keybind.Toggle)
 		elseif Input.UserInputType == Enum.UserInputType.Keyboard and Key == Keybind.Value then
 			Keybind.Toggle = not Keybind.Toggle
 			Keybind.AcceptedPress = {Type = "Keyboard", Key = Key}
@@ -1015,11 +1279,8 @@ local function InitKeybind(Parent,ScreenAsset,Window,Keybind)
 				or Input.UserInputType == Enum.UserInputType.MouseButton3
 
 			if Keybind.WaitingForBind and IsMouseButton then
-				KeybindAsset.Value.Text = "[ " .. MouseKey .. " ]"
-				Keybind.Value = MouseKey
 				Keybind.WaitingForBind = false
-				Window.Flags[Keybind.Flag] = Keybind.Value
-				Keybind.Callback(Keybind.Value,false,Keybind.Toggle)
+				commitBind(MouseKey)
 			elseif IsMouseButton and MouseKey == Keybind.Value then
 				Keybind.Toggle = not Keybind.Toggle
 				Keybind.AcceptedPress = {Type = "Mouse", Key = MouseKey}
@@ -1050,13 +1311,13 @@ local function InitKeybind(Parent,ScreenAsset,Window,Keybind)
 		Keybind.Name = Name
 		KeybindAsset.Title.Text = Name
 	end
-	function Keybind:SetValue(Key)
-		KeybindAsset.Value.Text = "[ " .. tostring(Key) .. " ]"
-		Keybind.Value = Key
+	function Keybind:SetValue(Key, silent)
 		Keybind.WaitingForBind = false
 		Keybind.AcceptedPress = nil
+		Keybind.Value = tostring(Key or "NONE")
+		KeybindAsset.Value.Text = "[ " .. Keybind.Value .. " ]"
 		Window.Flags[Keybind.Flag] = Keybind.Value
-		Keybind.Callback(Keybind.Value,false,Keybind.Toggle)
+		if not silent then Keybind.Callback(Keybind.Value,false,Keybind.Toggle) end
 	end
 	function Keybind:SetCallback(Callback)
 		Keybind.Callback = Callback
@@ -1065,6 +1326,7 @@ local function InitKeybind(Parent,ScreenAsset,Window,Keybind)
 		InitToolTip(KeybindAsset,ScreenAsset,Text)
 	end
 	AttachVisibility(Keybind, KeybindAsset)
+	RegisterSearchEntry(Keybind, Keybind.Name)
 end
 local function InitDropdown(Parent,ScreenAsset,Window,Dropdown)
 	local DropdownAsset = GetAsset("Dropdown/Dropdown")
@@ -1227,6 +1489,7 @@ local function InitDropdown(Parent,ScreenAsset,Window,Dropdown)
 		InitToolTip(DropdownAsset,ScreenAsset,Text)
 	end
 	AttachVisibility(Dropdown, DropdownAsset)
+	RegisterSearchEntry(Dropdown, Dropdown.Name)
 end
 local function InitColorpicker(Parent,ScreenAsset,Window,Colorpicker)
 	local ColorpickerAsset = GetAsset("Colorpicker/Colorpicker")
@@ -1404,10 +1667,11 @@ local function InitColorpicker(Parent,ScreenAsset,Window,Colorpicker)
 		Update()
 	end)
 	AttachVisibility(Colorpicker, ColorpickerAsset)
+	RegisterSearchEntry(Colorpicker, Colorpicker.Name)
 end
 
 local Bracket = InitScreen()
-Bracket.Version = "3.2-skuff.2"
+Bracket.Version = "3.2-skuff.3"
 function Bracket:Window(Window)
 	Window = GetType(Window,{},"table")
 	Window.Name = GetType(Window.Name,"Window","string")
@@ -1591,18 +1855,22 @@ function Bracket:Window(Window)
 		function Tab:Section(Section)
 			Section = GetType(Section,{},"table")
 			Section.Name = GetType(Section.Name,"Section","string")
+			Section._Tab = Tab
 			local SectionContainer, SectionAsset = InitSection(ChooseTab(Section.Side),Section)
+			Tab.Sections[#Tab.Sections + 1] = Section
 
 			function Section:Divider(Divider)
 				Divider = GetType(Divider,{},"table")
 				Divider.Text = GetType(Divider.Text,"","string")
 				InitDivider(SectionContainer,Divider)
+				Divider._SearchSection, Divider._SearchTab = Section, Tab
 				return Divider
 			end
 			function Section:Label(Label)
 				Label = GetType(Label,{},"table")
 				Label.Text = GetType(Label.Text,"Label","string")
 				InitLabel(SectionContainer,Label)
+				Label._SearchSection, Label._SearchTab = Section, Tab
 				return Label
 			end
 			function Section:Button(Button)
@@ -1610,6 +1878,7 @@ function Bracket:Window(Window)
 				Button.Name = GetType(Button.Name,"Button","string")
 				Button.Callback = GetType(Button.Callback,function() end,"function")
 				InitButton(SectionContainer,Bracket.ScreenAsset,Window,Button)
+				Button._SearchSection, Button._SearchTab = Section, Tab
 				return Button
 			end
 			function Section:Toggle(Toggle)
@@ -1623,6 +1892,7 @@ function Bracket:Window(Window)
 				Window.Flags[Toggle.Flag] = Toggle.Value
 
 				InitToggle(SectionContainer,Bracket.ScreenAsset,Window,Toggle)
+				Toggle._SearchSection, Toggle._SearchTab = Section, Tab
 				return Toggle
 			end
 			function Section:Slider(Slider)
@@ -1640,6 +1910,7 @@ function Bracket:Window(Window)
 				Window.Flags[Slider.Flag] = Slider.Value
 
 				InitSlider(SectionContainer,Bracket.ScreenAsset,Window,Slider)
+				Slider._SearchSection, Slider._SearchTab = Section, Tab
 				return Slider
 			end
 			function Section:Textbox(Textbox)
@@ -1655,6 +1926,7 @@ function Bracket:Window(Window)
 				Window.Flags[Textbox.Flag] = Textbox.Value
 
 				InitTextbox(SectionContainer,Bracket.ScreenAsset,Window,Textbox)
+				Textbox._SearchSection, Textbox._SearchTab = Section, Tab
 				return Textbox
 			end
 			function Section:Keybind(Keybind)
@@ -1670,6 +1942,7 @@ function Bracket:Window(Window)
 				Window.Flags[Keybind.Flag] = Keybind.Value
 
 				InitKeybind(SectionContainer,Bracket.ScreenAsset,Window,Keybind)
+				Keybind._SearchSection, Keybind._SearchTab = Section, Tab
 				return Keybind
 			end
 			function Section:Dropdown(Dropdown)
@@ -1681,6 +1954,7 @@ function Bracket:Window(Window)
 				Window.Flags[Dropdown.Flag] = Dropdown.Value
 
 				InitDropdown(SectionContainer,Bracket.ScreenAsset,Window,Dropdown)
+				Dropdown._SearchSection, Dropdown._SearchTab = Section, Tab
 				return Dropdown
 			end
 			function Section:Colorpicker(Colorpicker)
@@ -1694,6 +1968,7 @@ function Bracket:Window(Window)
 				Window.Flags[Colorpicker.Flag] = Colorpicker.Value
 
 				InitColorpicker(SectionContainer,Bracket.ScreenAsset,Window,Colorpicker)
+				Colorpicker._SearchSection, Colorpicker._SearchTab = Section, Tab
 				return Colorpicker
 			end
 			return Section
@@ -1701,6 +1976,97 @@ function Bracket:Window(Window)
 		return Tab
 	end
 	return Window
+end
+
+function Bracket:Confirm(options)
+    options = type(options) == "table" and options or {}
+    if Runtime.Destroyed or not Bracket.ScreenAsset or not Bracket.ScreenAsset.Parent then
+        if type(options.OnCancel) == "function" then options.OnCancel() end
+        return nil
+    end
+    if Runtime.ConfirmDialog and Runtime.ConfirmDialog.Parent then Runtime.ConfirmDialog:Destroy() end
+    local overlay = Instance.new("Frame")
+    overlay.Name = "BracketConfirm"
+    overlay.BackgroundColor3 = Color3.fromRGB(0,0,0)
+    overlay.BackgroundTransparency = 0.25
+    overlay.Size = UDim2.fromScale(1,1)
+    overlay.ZIndex = 100
+    overlay.Parent = Bracket.ScreenAsset
+    local box = Instance.new("Frame")
+    box.AnchorPoint = Vector2.new(0.5,0.5)
+    box.Position = UDim2.fromScale(0.5,0.5)
+    box.Size = UDim2.fromOffset(360,150)
+    box.BackgroundColor3 = Color3.fromRGB(18,18,18)
+    box.BorderColor3 = Color3.fromRGB(255,128,64)
+    box.ZIndex = 101
+    box.Parent = overlay
+    local title = Instance.new("TextLabel")
+    title.BackgroundTransparency = 1
+    title.Position = UDim2.fromOffset(10,8)
+    title.Size = UDim2.new(1,-20,0,22)
+    title.Font = Enum.Font.Code
+    title.TextSize = 16
+    title.TextColor3 = Color3.fromRGB(255,255,255)
+    title.Text = tostring(options.Title or "Confirm")
+    title.ZIndex = 102
+    title.Parent = box
+    local desc = Instance.new("TextLabel")
+    desc.BackgroundTransparency = 1
+    desc.Position = UDim2.fromOffset(12,36)
+    desc.Size = UDim2.new(1,-24,0,62)
+    desc.Font = Enum.Font.Code
+    desc.TextSize = 13
+    desc.TextWrapped = true
+    desc.TextColor3 = Color3.fromRGB(220,220,220)
+    desc.Text = tostring(options.Description or "Are you sure?")
+    desc.ZIndex = 102
+    desc.Parent = box
+    local replace = Instance.new("TextButton")
+    replace.Position = UDim2.new(0,12,1,-40)
+    replace.Size = UDim2.new(0.5,-18,0,28)
+    replace.BackgroundColor3 = Color3.fromRGB(50,110,65)
+    replace.TextColor3 = Color3.new(1,1,1)
+    replace.Font = Enum.Font.Code
+    replace.Text = tostring(options.ConfirmText or "Confirm")
+    replace.ZIndex = 102
+    replace.Parent = box
+    local cancel = replace:Clone()
+    cancel.Position = UDim2.new(0.5,6,1,-40)
+    cancel.BackgroundColor3 = Color3.fromRGB(115,45,45)
+    cancel.Text = tostring(options.CancelText or "Cancel")
+    cancel.Parent = box
+    Runtime.ConfirmDialog = overlay
+    local done = false
+    local function finish(confirmValue)
+        if done then return end
+        done = true
+        if overlay.Parent then overlay:Destroy() end
+        Runtime.ConfirmDialog = nil
+        local callback = confirmValue and options.OnConfirm or options.OnCancel
+        if type(callback) == "function" then pcall(callback) end
+    end
+    Connect(replace.MouseButton1Click, function() finish(true) end)
+    Connect(cancel.MouseButton1Click, function() finish(false) end)
+    return {Confirm = function() finish(true) end, Cancel = function() finish(false) end, Asset = overlay}
+end
+
+function Bracket:GetBindConflicts()
+    local aggregate = {}
+    for _, window in ipairs(Runtime.Windows) do
+        if window and type(window.GetBindConflicts) == "function" then
+            for key, items in pairs(window:GetBindConflicts()) do aggregate[key] = items end
+        end
+    end
+    return aggregate
+end
+
+function Bracket:GetDiagnostics()
+    local connectionCount, searchCount, sectionCount, windowCount = 0,0,0,0
+    for _, connection in ipairs(Runtime.Connections) do if connection then connectionCount = connectionCount + 1 end end
+    for _, api in ipairs(Runtime.SearchEntries) do if api and api._Asset then searchCount = searchCount + 1 end end
+    for _, section in ipairs(Runtime.Sections) do if section and section._Asset then sectionCount = sectionCount + 1 end end
+    for _, window in ipairs(Runtime.Windows) do if window then windowCount = windowCount + 1 end end
+    return {Connections=connectionCount, SearchEntries=searchCount, Sections=sectionCount, Windows=windowCount, Query=Runtime.SearchQuery}
 end
 
 function Bracket:Destroy()
@@ -1720,6 +2086,11 @@ function Bracket:Destroy()
 	Runtime.Windows = {}
 	Runtime.HiddenContainer = nil
 	Runtime.RefreshByInstance = setmetatable({}, {__mode = "k"})
+	Runtime.SearchEntries = {}
+	Runtime.Sections = {}
+	Runtime.BindRegistry = {}
+	Runtime.SearchQuery = ""
+	Runtime.ConfirmDialog = nil
 	pcall(function() RunService:SetRobloxGuiFocused(false) end)
 end
 
