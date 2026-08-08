@@ -7,6 +7,7 @@ local PlayerService = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
 
 
+local Bracket
 local Runtime = {
     Connections = {},
     Screens = {},
@@ -331,7 +332,7 @@ local function InitWindow(ScreenAsset,Window)
 
     local uiScale = Instance.new("UIScale")
     uiScale.Name = "BracketUIScale"
-    uiScale.Scale = Window.Scale or 1
+    uiScale.Scale = 1
     uiScale.Parent = WindowAsset
     Window._UIScale = uiScale
 
@@ -394,6 +395,9 @@ local function InitWindow(ScreenAsset,Window)
                 local ownMatch = query == "" or tostring(section.Name or ""):lower():find(query, 1, true) ~= nil
                 local match = ownMatch or sectionMatches[section] == true
                 section:_SetSearchVisible(match)
+                if type(section._SetSearchExpanded) == "function" then
+                    section:_SetSearchExpanded(query ~= "" and match)
+                end
                 if match and query ~= "" and not firstMatchingTab then firstMatchingTab = section._Tab end
             end
         end
@@ -413,20 +417,31 @@ local function InitWindow(ScreenAsset,Window)
     function Window:GetSearchQuery() return Runtime.SearchQuery end
     Connect(searchBox:GetPropertyChangedSignal("Text"), function() applySearch(searchBox.Text) end)
 
+    Window.CustomFonts = Window.CustomFonts or {}
+    function Window:RegisterFont(fontName, fontFace)
+        fontName = tostring(fontName or "")
+        if fontName == "" or typeof(fontFace) ~= "Font" then return false end
+        Window.CustomFonts[fontName] = fontFace
+        if Window.Font == fontName then Window:SetFont(fontName) end
+        return true
+    end
     function Window:SetScale(scale)
+        -- Compatibility-only; V1.5.1 intentionally exposes no UI Scale control.
         scale = math.clamp(tonumber(scale) or 1, 0.65, 1.5)
         Window.Scale = scale
         uiScale.Scale = scale
-        Window.Flags["UI/Scale"] = scale
     end
     function Window:SetFont(fontName)
         fontName = tostring(fontName or "Code")
-        local font = Enum.Font[fontName] or Enum.Font.Code
+        local customFont = Window.CustomFonts[fontName]
+        local enumFont = fontName == "Minecraft" and Enum.Font.Arcade or (Enum.Font[fontName] or Enum.Font.Code)
         Window.Font = fontName
         Window.Flags["UI/Font"] = fontName
         for _, object in ipairs(WindowAsset:GetDescendants()) do
             if object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then
-                pcall(function() object.Font = font end)
+                pcall(function()
+                    if customFont then object.FontFace = customFont else object.Font = enumFont end
+                end)
             end
         end
     end
@@ -634,7 +649,6 @@ local function InitWindow(ScreenAsset,Window)
 
     Window.Flags["UI/Window/Size"] = {Window.Size.X.Offset,Window.Size.Y.Offset}
     Window.Flags["UI/Window/Position"] = {Window.Position.X.Scale,Window.Position.X.Offset,Window.Position.Y.Scale,Window.Position.Y.Offset}
-    Window.Flags["UI/Scale"] = Window.Scale or 1
     Window.Flags["UI/Theme"] = Window.Theme or "Dark"
     Window.Flags["UI/Font"] = Window.Font or "Code"
     local sizeElement = {Flag = "UI/Window/Size", IgnoreFlag = false}
@@ -649,15 +663,12 @@ local function InitWindow(ScreenAsset,Window)
             Window:SetPosition(UDim2.new(tonumber(value[1]) or 0.5,tonumber(value[2]) or 0,tonumber(value[3]) or 0.5,tonumber(value[4]) or 0))
         end
     end
-    local scaleElement = {Flag = "UI/Scale", IgnoreFlag = false}
-    function scaleElement:SetValue(value) Window:SetScale(value) end
     local themeElement = {Flag = "UI/Theme", IgnoreFlag = false}
     function themeElement:SetValue(value) Window:SetTheme(value) end
     local fontElement = {Flag = "UI/Font", IgnoreFlag = false}
     function fontElement:SetValue(value) Window:SetFont(value) end
     Window.Elements[#Window.Elements+1] = sizeElement
     Window.Elements[#Window.Elements+1] = positionElement
-    Window.Elements[#Window.Elements+1] = scaleElement
     Window.Elements[#Window.Elements+1] = themeElement
     Window.Elements[#Window.Elements+1] = fontElement
 
@@ -748,7 +759,7 @@ local function InitSection(Parent,Section)
 
 	SectionAsset.Parent = Parent
 	SectionAsset.Title.Text = Section.Name
-	SectionAsset.Title.Size = UDim2.new(0,SectionAsset.Title.TextBounds.X + 6,0,2)
+	SectionAsset.Title.Size = UDim2.new(1,-30,0,math.max(14,SectionAsset.Title.TextBounds.Y + 2))
 	local listLayout = SectionAsset.Container.ListLayout
 	local updateQueued = false
 	local lastHeight = -1
@@ -777,32 +788,68 @@ local function InitSection(Parent,Section)
 	function Section:SetName(Name)
 		Section.Name = Name
 		SectionAsset.Title.Text = Name
-		SectionAsset.Title.Size = UDim2.new(0,SectionAsset.Title.TextBounds.X + 6,0,2)
+		SectionAsset.Title.Size = UDim2.new(1,-30,0,math.max(14,SectionAsset.Title.TextBounds.Y + 2))
 		refreshLayout()
 	end
     Section.Collapsed = Section.Collapsed == true
     Section._Container = SectionAsset.Container
     Section._ExpandedHeight = nil
-    function Section:SetCollapsed(value)
-        value = value == true
-        Section.Collapsed = value
-        SectionAsset.Container.Visible = not value
-        if value then
-            SectionAsset.Size = UDim2.new(1,0,0,14)
+    Section._SearchExpanded = false
+    local collapseButton = Instance.new("TextButton")
+    collapseButton.Name = "CollapseToggle"
+    collapseButton.BackgroundTransparency = 1
+    collapseButton.BorderSizePixel = 0
+    collapseButton.Text = Section.Collapsed and "+" or "−"
+    collapseButton.TextColor3 = SectionAsset.Title.TextColor3
+    collapseButton.TextSize = math.max(12, SectionAsset.Title.TextSize)
+    collapseButton.Font = SectionAsset.Title.Font
+    collapseButton.AutoButtonColor = false
+    collapseButton.AnchorPoint = Vector2.new(1, 0)
+    collapseButton.Position = UDim2.new(1, -4, 0, 0)
+    collapseButton.Size = UDim2.new(0, 22, 0, 16)
+    collapseButton.ZIndex = math.max(SectionAsset.Title.ZIndex, 2) + 1
+    collapseButton.Parent = SectionAsset
+    Section._CollapseButton = collapseButton
+    pcall(function()
+        SectionAsset.Title.Active = true
+        SectionAsset.Title.Size = UDim2.new(1, -30, 0, math.max(14, SectionAsset.Title.TextBounds.Y + 2))
+    end)
+    local function applyCollapsedVisual()
+        local collapsed = Section.Collapsed and not Section._SearchExpanded
+        SectionAsset.Container.Visible = not collapsed
+        collapseButton.Text = collapsed and "+" or "−"
+        if collapsed then
+            SectionAsset.Size = UDim2.new(1,0,0,18)
+            if tabRefresh then tabRefresh() end
         else
             refreshLayout()
         end
-        if tabRefresh then tabRefresh() end
+    end
+    function Section:SetCollapsed(value)
+        value = value == true
+        if Section.Collapsed == value and not Section._SearchExpanded then return end
+        Section.Collapsed = value
+        applyCollapsedVisual()
+    end
+    function Section:_SetSearchExpanded(value)
+        value = value == true
+        if Section._SearchExpanded == value then return end
+        Section._SearchExpanded = value
+        applyCollapsedVisual()
     end
     function Section:IsCollapsed() return Section.Collapsed == true end
+    Connect(collapseButton.MouseButton1Click, function()
+        if Section._SearchExpanded then return end
+        Section:SetCollapsed(not Section.Collapsed)
+    end)
     Connect(SectionAsset.Title.InputBegan, function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        if input.UserInputType == Enum.UserInputType.MouseButton1 and not Section._SearchExpanded then
             Section:SetCollapsed(not Section.Collapsed)
         end
     end)
 	function Section:RefreshLayout()
-        if Section.Collapsed then
-            SectionAsset.Size = UDim2.new(1,0,0,14)
+        if Section.Collapsed and not Section._SearchExpanded then
+            SectionAsset.Size = UDim2.new(1,0,0,18)
             if tabRefresh then tabRefresh() end
         else
             refreshLayout()
@@ -895,6 +942,51 @@ local function InitButton(Parent,ScreenAsset,Window,Button)
 	AttachVisibility(Button, ButtonAsset)
     RegisterSearchEntry(Button, Button.Name, Button._Section, Button._Tab)
 end
+local function GetKeybindConflicts(Window, Keybind, proposedKey)
+    local conflicts = {}
+    proposedKey = tostring(proposedKey or "NONE")
+    if proposedKey == "NONE" then return conflicts end
+    for _, element in ipairs(Window.Elements or {}) do
+        if element ~= Keybind and element._IsKeybind and tostring(element.Value or "NONE") == proposedKey then
+            conflicts[#conflicts + 1] = element
+        end
+    end
+    return conflicts
+end
+
+local function ResolveKeybindConflict(Window, Keybind, proposedKey, applyCallback, cancelCallback)
+    proposedKey = tostring(proposedKey or "NONE")
+    Keybind.WaitingForBind = false
+    local conflicts = GetKeybindConflicts(Window, Keybind, proposedKey)
+    if #conflicts == 0 or proposedKey == "NONE" then
+        applyCallback(proposedKey)
+        return
+    end
+    local names = {}
+    for _, element in ipairs(conflicts) do names[#names + 1] = tostring(element.Name or element.Flag or "another action") end
+    local function replace()
+        for _, element in ipairs(conflicts) do
+            if type(element.SetValue) == "function" then pcall(function() element:SetValue("NONE") end) end
+        end
+        applyCallback(proposedKey)
+    end
+    local function cancel()
+        if cancelCallback then cancelCallback() end
+    end
+    if Bracket and type(Bracket.Confirm) == "function" then
+        Bracket:Confirm({
+            Title = "Bind Conflict",
+            Description = string.format("%s is already used by %s.", proposedKey, table.concat(names, ", ")),
+            ConfirmText = "Replace",
+            CancelText = "Cancel",
+            OnConfirm = replace,
+            OnCancel = cancel,
+        })
+    else
+        cancel()
+    end
+end
+
 local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 	local ToggleAsset = GetAsset("Toggle/Toggle")
 
@@ -939,9 +1031,11 @@ local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 		Keybind = GetType(Keybind,{},"table")
 		Keybind.Flag = GetType(Keybind.Flag,Toggle.Flag.."/Keybind","string")
 
+		Keybind.Name = GetType(Keybind.Name,Toggle.Name .. " Keybind","string")
 		Keybind.Value = GetType(Keybind.Value,"NONE","string")
 		Keybind.Callback = GetType(Keybind.Callback,function() end,"function")
 		Keybind.Blacklist = GetType(Keybind.Blacklist,{"W","A","S","D","Slash","Tab","Backspace","Escape","Space","Delete","Unknown","Backquote"},"table")
+		Keybind.AcceptedInputs = setmetatable({}, {__mode = "k"})
 
 		Window.Elements[#Window.Elements + 1] = Keybind
 		Window.Flags[Keybind.Flag] = Keybind.Value
@@ -950,7 +1044,21 @@ local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 		ToggleAsset.Keybind.Text = "[ " .. Keybind.Value .. " ]"
 		Keybind.WaitingForBind = false
 
+        local function applyKey(key, fireCallback)
+            key = tostring(key or "NONE")
+            ToggleAsset.Keybind.Text = "[ " .. key .. " ]"
+            Keybind.Value = key
+            Keybind.WaitingForBind = false
+            Window.Flags[Keybind.Flag] = key
+            if fireCallback ~= false then Keybind.Callback(key,false) end
+        end
+        local function cancelBinding()
+            ToggleAsset.Keybind.Text = "[ " .. tostring(Keybind.Value or "NONE") .. " ]"
+            Keybind.WaitingForBind = false
+        end
+
 		Connect(ToggleAsset.Keybind.MouseButton1Click, function()
+            if not IsRuntimeVisible(Keybind) then return end
 			ToggleAsset.Keybind.Text = "[ ... ]"
 			Keybind.WaitingForBind = true
 		end)
@@ -960,85 +1068,44 @@ local function InitToggle(Parent,ScreenAsset,Window,Toggle)
 		end)
 
 		Connect(UserInputService.InputBegan, function(Input, Processed)
-            if Processed or UserInputService:GetFocusedTextBox() then return end
-			local Key = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
+            if Processed or UserInputService:GetFocusedTextBox() or (Runtime.ConfirmDialog and Runtime.ConfirmDialog.Parent) or not IsRuntimeVisible(Keybind) then return end
+			local keyboardKey = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
 			if Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.Keyboard then
-				if not table.find(Keybind.Blacklist,Key) then
-					ToggleAsset.Keybind.Text = "[ " .. Key .. " ]"
-					Keybind.Value = Key
-				else
-					if Keybind.DoNotClear then
-						ToggleAsset.Keybind.Text = "[ " .. Keybind.Value .. " ]"
-					else
-						ToggleAsset.Keybind.Text = "[ NONE ]"
-						Keybind.Value = "NONE"
-					end
-				end
-
-				Keybind.WaitingForBind = false
-				Window.Flags[Keybind.Flag] = Keybind.Value
-				Keybind.Callback(Keybind.Value,false)
-			elseif Input.UserInputType == Enum.UserInputType.Keyboard then
-				if Key == Keybind.Value then
-					Toggle.Value = not Toggle.Value 
+                local proposed = table.find(Keybind.Blacklist,keyboardKey) and (Keybind.DoNotClear and Keybind.Value or "NONE") or keyboardKey
+                ResolveKeybindConflict(Window, Keybind, proposed, function(key) applyKey(key, true) end, cancelBinding)
+			elseif Input.UserInputType == Enum.UserInputType.Keyboard and keyboardKey == Keybind.Value then
+                Keybind.AcceptedInputs[Input] = Keybind.Value
+				Toggle.Value = not Toggle.Value
+				Window.Flags[Toggle.Flag] = Toggle.Value
+				Toggle.Callback(Toggle.Value)
+				Keybind.Callback(Keybind.Value,true)
+				ToggleAsset.Tick.BackgroundColor3 = Toggle.Value and Window.Color or Color3.fromRGB(60,60,60)
+			end
+			if Keybind.Mouse then
+				local mouseKey = tostring(Input.UserInputType):gsub("Enum.UserInputType.","")
+                local isMouse = Input.UserInputType == Enum.UserInputType.MouseButton1
+                    or Input.UserInputType == Enum.UserInputType.MouseButton2
+                    or Input.UserInputType == Enum.UserInputType.MouseButton3
+				if Keybind.WaitingForBind and isMouse then
+                    ResolveKeybindConflict(Window, Keybind, mouseKey, function(key) applyKey(key, true) end, cancelBinding)
+				elseif isMouse and mouseKey == Keybind.Value then
+                    Keybind.AcceptedInputs[Input] = Keybind.Value
+					Toggle.Value = not Toggle.Value
 					Window.Flags[Toggle.Flag] = Toggle.Value
-
 					Toggle.Callback(Toggle.Value)
 					Keybind.Callback(Keybind.Value,true)
 					ToggleAsset.Tick.BackgroundColor3 = Toggle.Value and Window.Color or Color3.fromRGB(60,60,60)
 				end
 			end
-			if Keybind.Mouse then
-				local Key = tostring(Input.UserInputType):gsub("Enum.UserInputType.","")
-				if Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.MouseButton1
-					or Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.MouseButton2
-					or Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.MouseButton3 then
-					ToggleAsset.Keybind.Text = "[ " .. Key .. " ]"
-
-					Keybind.Value = Key
-					Keybind.WaitingForBind = false
-					Window.Flags[Keybind.Flag] = Keybind.Value
-					Keybind.Callback(Keybind.Value,false)
-				elseif Input.UserInputType == Enum.UserInputType.MouseButton1
-					or Input.UserInputType == Enum.UserInputType.MouseButton2
-					or Input.UserInputType == Enum.UserInputType.MouseButton3 then
-
-					if Key == Keybind.Value then
-						Toggle.Value = not Toggle.Value
-						Window.Flags[Toggle.Flag] = Toggle.Value
-
-						Toggle.Callback(Toggle.Value)
-						Keybind.Callback(Keybind.Value,true)
-						ToggleAsset.Tick.BackgroundColor3 = Toggle.Value and Window.Color or Color3.fromRGB(60,60,60)
-					end
-				end
-			end
 		end)
 		Connect(UserInputService.InputEnded, function(Input)
-			local Key = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
-			if Input.UserInputType == Enum.UserInputType.Keyboard then
-				if Key == Keybind.Value then
-					Keybind.Callback(Keybind.Value,false)
-				end
-			end
-			if Keybind.Mouse then
-				local Key = tostring(Input.UserInputType):gsub("Enum.UserInputType.","")
-				if Input.UserInputType == Enum.UserInputType.MouseButton1
-					or Input.UserInputType == Enum.UserInputType.MouseButton2
-					or Input.UserInputType == Enum.UserInputType.MouseButton3 then
-
-					if Key == Keybind.Value then
-						Keybind.Callback(Keybind.Value,false)
-					end
-				end
-			end
+            local acceptedKey = Keybind.AcceptedInputs[Input]
+            if not acceptedKey then return end
+            Keybind.AcceptedInputs[Input] = nil
+			Keybind.Callback(acceptedKey,false)
 		end)
 		function Keybind:SetValue(Key)
-			ToggleAsset.Keybind.Text = "[ " .. tostring(Key) .. " ]"
-			Keybind.Value = Key
-			Keybind.WaitingForBind = false
-			Window.Flags[Keybind.Flag] = Keybind.Value
-			Keybind.Callback(Keybind.Value,false)
+            applyKey(Key, true)
 		end
 		function Keybind:SetCallback(Callback)
 			Keybind.Callback = Callback
@@ -1202,8 +1269,23 @@ local function InitKeybind(Parent,ScreenAsset,Window,Keybind)
 	KeybindAsset.Title.Text = Keybind.Name
 	KeybindAsset.Value.Text = "[ " .. Keybind.Value .. " ]"
 	Keybind.WaitingForBind = false
+    Keybind.AcceptedInputs = setmetatable({}, {__mode = "k"})
+
+    local function applyKey(key, fireCallback)
+        key = tostring(key or "NONE")
+        KeybindAsset.Value.Text = "[ " .. key .. " ]"
+        Keybind.Value = key
+        Keybind.WaitingForBind = false
+        Window.Flags[Keybind.Flag] = key
+        if fireCallback ~= false then Keybind.Callback(key,false,Keybind.Toggle) end
+    end
+    local function cancelBinding()
+        KeybindAsset.Value.Text = "[ " .. tostring(Keybind.Value or "NONE") .. " ]"
+        Keybind.WaitingForBind = false
+    end
 
 	Connect(KeybindAsset.MouseButton1Click, function()
+        if not IsRuntimeVisible(Keybind) then return end
 		KeybindAsset.Value.Text = "[ ... ]"
 		Keybind.WaitingForBind = true
 	end)
@@ -1215,83 +1297,43 @@ local function InitKeybind(Parent,ScreenAsset,Window,Keybind)
 		KeybindAsset.Title.Size = UDim2.new(1,-KeybindAsset.Value.Size.X.Offset,1,0)
 	end)
 	Connect(UserInputService.InputBegan, function(Input, Processed)
-        if Processed or UserInputService:GetFocusedTextBox() then return end
-		local Key = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
+        if Processed or UserInputService:GetFocusedTextBox() or (Runtime.ConfirmDialog and Runtime.ConfirmDialog.Parent) or not IsRuntimeVisible(Keybind) then return end
+		local keyboardKey = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
 		if Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.Keyboard then
-			if not table.find(Keybind.Blacklist,Key) then
-				KeybindAsset.Value.Text = "[ " .. Key .. " ]"
-				Keybind.Value = Key
-			else
-				if Keybind.DoNotClear then
-					KeybindAsset.Value.Text = "[ " .. Keybind.Value .. " ]"
-				else
-					KeybindAsset.Value.Text = "[ NONE ]"
-					Keybind.Value = "NONE"
-				end
-			end
-
-			Keybind.WaitingForBind = false
-			Window.Flags[Keybind.Flag] = Keybind.Value
-			Keybind.Callback(Keybind.Value,false,Keybind.Toggle)
-		elseif Input.UserInputType == Enum.UserInputType.Keyboard then
-			if Key == Keybind.Value then
+            local proposed = table.find(Keybind.Blacklist,keyboardKey) and (Keybind.DoNotClear and Keybind.Value or "NONE") or keyboardKey
+            ResolveKeybindConflict(Window, Keybind, proposed, function(key) applyKey(key, true) end, cancelBinding)
+		elseif Input.UserInputType == Enum.UserInputType.Keyboard and keyboardKey == Keybind.Value then
+            Keybind.AcceptedInputs[Input] = Keybind.Value
+			Keybind.Toggle = not Keybind.Toggle
+			Keybind.Callback(Keybind.Value,true,Keybind.Toggle)
+		end
+		if Keybind.Mouse then
+			local mouseKey = tostring(Input.UserInputType):gsub("Enum.UserInputType.","")
+            local isMouse = Input.UserInputType == Enum.UserInputType.MouseButton1
+                or Input.UserInputType == Enum.UserInputType.MouseButton2
+                or Input.UserInputType == Enum.UserInputType.MouseButton3
+			if Keybind.WaitingForBind and isMouse then
+                ResolveKeybindConflict(Window, Keybind, mouseKey, function(key) applyKey(key, true) end, cancelBinding)
+			elseif isMouse and mouseKey == Keybind.Value then
+                Keybind.AcceptedInputs[Input] = Keybind.Value
 				Keybind.Toggle = not Keybind.Toggle
 				Keybind.Callback(Keybind.Value,true,Keybind.Toggle)
 			end
 		end
-		if Keybind.Mouse then
-			local Key = tostring(Input.UserInputType):gsub("Enum.UserInputType.","")
-			if Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.MouseButton1
-				or Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.MouseButton2
-				or Keybind.WaitingForBind and Input.UserInputType == Enum.UserInputType.MouseButton3 then
-				KeybindAsset.Value.Text = "[ " .. Key .. " ]"
-
-				Keybind.Value = Key
-				Keybind.WaitingForBind = false
-				Window.Flags[Keybind.Flag] = Keybind.Value
-				Keybind.Callback(Keybind.Value,false,Keybind.Toggle)
-			elseif Input.UserInputType == Enum.UserInputType.MouseButton1
-				or Input.UserInputType == Enum.UserInputType.MouseButton2
-				or Input.UserInputType == Enum.UserInputType.MouseButton3 then
-
-				if Key == Keybind.Value then
-					Keybind.Toggle = not Keybind.Toggle
-					Keybind.Callback(Keybind.Value,true,Keybind.Toggle)
-				end
-			end
-		end
 	end)
 	Connect(UserInputService.InputEnded, function(Input)
-		local Key = tostring(Input.KeyCode):gsub("Enum.KeyCode.","")
-		if Input.UserInputType == Enum.UserInputType.Keyboard then
-			if Key == Keybind.Value then
-				Keybind.Callback(Keybind.Value,false,Keybind.Toggle)
-			end
-		end
-		if Keybind.Mouse then
-			local Key = tostring(Input.UserInputType):gsub("Enum.UserInputType.","")
-			if Input.UserInputType == Enum.UserInputType.MouseButton1
-				or Input.UserInputType == Enum.UserInputType.MouseButton2
-				or Input.UserInputType == Enum.UserInputType.MouseButton3 then
-
-				if Key == Keybind.Value then
-					Keybind.Callback(Keybind.Value,false,Keybind.Toggle)
-				end
-			end
-		end
+        local acceptedKey = Keybind.AcceptedInputs[Input]
+        if not acceptedKey then return end
+        Keybind.AcceptedInputs[Input] = nil
+		Keybind.Callback(acceptedKey,false,Keybind.Toggle)
 	end)
-
 
 	function Keybind:SetName(Name)
 		Keybind.Name = Name
 		KeybindAsset.Title.Text = Name
 	end
 	function Keybind:SetValue(Key)
-		KeybindAsset.Value.Text = "[ " .. tostring(Key) .. " ]"
-		Keybind.Value = Key
-		Keybind.WaitingForBind = false
-		Window.Flags[Keybind.Flag] = Keybind.Value
-		Keybind.Callback(Keybind.Value,false,Keybind.Toggle)
+        applyKey(Key, true)
 	end
 	function Keybind:SetCallback(Callback)
 		Keybind.Callback = Callback
@@ -1299,8 +1341,8 @@ local function InitKeybind(Parent,ScreenAsset,Window,Keybind)
 	function Keybind:ToolTip(Text)
 		InitToolTip(KeybindAsset,ScreenAsset,Text)
 	end
-	AttachVisibility(Keybind, KeybindAsset)
     Keybind._IsKeybind = true
+	AttachVisibility(Keybind, KeybindAsset)
     RegisterSearchEntry(Keybind, Keybind.Name, Keybind._Section, Keybind._Tab)
 end
 local function InitDropdown(Parent,ScreenAsset,Window,Dropdown)
@@ -1651,8 +1693,8 @@ local function InitColorpicker(Parent,ScreenAsset,Window,Colorpicker)
     RegisterSearchEntry(Colorpicker, Colorpicker.Name, Colorpicker._Section, Colorpicker._Tab)
 end
 
-local Bracket = InitScreen()
-Bracket.Version = "3.2-skuff.4"
+Bracket = InitScreen()
+Bracket.Version = "3.2-skuff.5"
 function Bracket:Window(Window)
 	Window = GetType(Window,{},"table")
 	Window.Name = GetType(Window.Name,"Window","string")
