@@ -730,7 +730,14 @@ local function InitTab(ScreenAsset,WindowAsset,Window,Tab)
 		ChooseTab(ScreenAsset,TabButtonAsset,TabAsset)
 	end)
 
-	if #WindowAsset.TabContainer:GetChildren() == 1 then
+	local hasOtherTab = false
+	for _, child in ipairs(WindowAsset.TabContainer:GetChildren()) do
+		if child ~= TabAsset and child:IsA("ScrollingFrame") then
+			hasOtherTab = true
+			break
+		end
+	end
+	if not hasOtherTab then
 		ChooseTab(ScreenAsset,TabButtonAsset,TabAsset)
 	end
 
@@ -1694,7 +1701,7 @@ local function InitColorpicker(Parent,ScreenAsset,Window,Colorpicker)
 end
 
 Bracket = InitScreen()
-Bracket.Version = "3.2-skuff.5"
+Bracket.Version = "3.2-skuff.6"
 function Bracket:Window(Window)
 	Window = GetType(Window,{},"table")
 	Window.Name = GetType(Window.Name,"Window","string")
